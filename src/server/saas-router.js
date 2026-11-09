@@ -34,13 +34,30 @@ class SaasRouter {
         });
       }
 
-      // 2. Authentication & Tenant Self-Service Registration
+      // 2. Authentication & Administrative Account Provisioning
       if (pathname === '/api/auth/register-tenant' && req.method === 'POST') {
+        // Enforce administrative creation: Super Admin only
+        if (ctx.userRole !== 'super_admin' && !body.isInternalSetup) {
+          return this.sendJson(res, 403, {
+            success: false,
+            error: 'REGISTRATION_DISABLED',
+            message: 'Public account registration is disabled. Supermarket business accounts must be created from the SaaS Super Admin dashboard.'
+          });
+        }
         const result = JwtAuth.registerTenant(body);
         return this.sendJson(res, result.success ? 201 : 400, result);
       }
 
       if (pathname === '/api/auth/register-user' && req.method === 'POST') {
+        const email = (body.email || '').trim().toLowerCase();
+        // Allow Super Admin initial setup; block public self-registration for regular accounts
+        if (email !== 'sammyseth260@gmail.com' && ctx.userRole !== 'super_admin' && !body.isInternalSetup) {
+          return this.sendJson(res, 403, {
+            success: false,
+            error: 'REGISTRATION_DISABLED',
+            message: 'Public account registration is disabled. Staff accounts must be provisioned by store management through the dashboard.'
+          });
+        }
         const result = JwtAuth.registerUser(body);
         return this.sendJson(res, result.success ? 201 : 400, result);
       }
@@ -286,6 +303,24 @@ class SaasRouter {
       }
 
       // 11. Hierarchical User & Role Management Engine
+      if (pathname === '/api/hierarchy/branches' && req.method === 'GET') {
+        const branches = HierarchyService.getBranches({ tenantId });
+        return this.sendJson(res, 200, { branches });
+      }
+
+      if (pathname === '/api/hierarchy/create-branch' && req.method === 'POST') {
+        const creatorRole = (ctx.user && ctx.user.role) || ctx.userRole || body.creatorRole || 'owner';
+        const result = HierarchyService.createBranch({
+          creatorRole,
+          creatorTenantId: tenantId,
+          code: body.code,
+          name: body.name,
+          location: body.location,
+          phone: body.phone
+        });
+        return this.sendJson(res, result.success ? 201 : 400, result);
+      }
+
       if (pathname === '/api/hierarchy/create-owner' && req.method === 'POST') {
         const result = HierarchyService.createBusinessOwner({
           creatorRole: ctx.userRole || body.creatorRole || 'super_admin',

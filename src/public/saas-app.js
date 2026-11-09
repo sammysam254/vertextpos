@@ -69,16 +69,18 @@ window.switchAuthTab = function(mode) {
   const frmIn = document.getElementById('frmLogin');
   const frmUp = document.getElementById('frmRegister');
 
-  if (mode === 'signup') {
-    btnUp.classList.add('active');
-    btnIn.classList.remove('active');
-    frmUp.style.display = 'block';
-    frmIn.style.display = 'none';
-  } else {
-    btnIn.classList.add('active');
-    btnUp.classList.remove('active');
-    frmIn.style.display = 'block';
-    frmUp.style.display = 'none';
+  if (btnUp && btnIn && frmUp && frmIn) {
+    if (mode === 'signup') {
+      btnUp.classList.add('active');
+      btnIn.classList.remove('active');
+      frmUp.style.display = 'block';
+      frmIn.style.display = 'none';
+    } else {
+      btnIn.classList.add('active');
+      btnUp.classList.remove('active');
+      frmIn.style.display = 'block';
+      frmUp.style.display = 'none';
+    }
   }
 };
 
@@ -266,6 +268,7 @@ function renderSidebarNav(role) {
     ],
     owner: [
       { id: 'owner_dash', label: 'Executive P&L Dashboard', tab: 'owner', icon: 'chart' },
+      { id: 'owner_branch', label: 'Add Supermarket Branch', action: 'openAddBranchModal', icon: 'building' },
       { id: 'owner_pos', label: 'POS Terminal (Full Control)', tab: 'pos', icon: 'cart' },
       { id: 'owner_admin', label: 'Appoint Business Admin', action: 'openCreateAdminModal', icon: 'user-plus' },
       { id: 'owner_inventory', label: 'Inventory & Catalog', tab: 'inventory', icon: 'box' },
@@ -1172,8 +1175,76 @@ window.handleCreateAdminSubmit = async function(e) {
   }
 };
 
-window.openCreateBranchManagerModal = function() {
+window.openAddBranchModal = function() {
+  document.getElementById('modalCreateBranch').style.display = 'flex';
+};
+
+window.closeAddBranchModal = function() {
+  document.getElementById('modalCreateBranch').style.display = 'none';
+};
+
+window.handleCreateBranchSubmit = async function(e) {
+  e.preventDefault();
+  showLoading('Creating Supermarket Branch...');
+
+  const payload = {
+    creatorRole: (STATE.currentUser && STATE.currentUser.role) || 'owner',
+    name: document.getElementById('nbrName').value.trim(),
+    code: document.getElementById('nbrCode').value.trim(),
+    location: document.getElementById('nbrLocation').value.trim(),
+    phone: document.getElementById('nbrPhone').value.trim()
+  };
+
+  try {
+    const res = await fetch('/api/hierarchy/create-branch', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Tenant-Id': STATE.currentTenantId,
+        'Authorization': `Bearer ${STATE.token}`
+      },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    hideLoading();
+
+    if (data.success) {
+      window.closeAddBranchModal();
+      showToast(data.message, 'success');
+      document.getElementById('nbrName').value = '';
+      document.getElementById('nbrCode').value = '';
+      document.getElementById('nbrLocation').value = '';
+      document.getElementById('nbrPhone').value = '';
+      window.loadOwnerDashboard();
+    } else {
+      showToast(`Error: ${data.message}`, 'error');
+    }
+  } catch (err) {
+    hideLoading();
+    showToast('Failed to create branch: ' + err.message, 'error');
+  }
+};
+
+window.openCreateBranchManagerModal = async function() {
+  const select = document.getElementById('mbBranchId');
+  select.innerHTML = '<option value="">Loading branches...</option>';
   document.getElementById('modalCreateBranchManager').style.display = 'flex';
+
+  try {
+    const res = await fetch('/api/hierarchy/branches', {
+      headers: { 'X-Tenant-Id': STATE.currentTenantId, 'Authorization': `Bearer ${STATE.token}` }
+    });
+    const data = await res.json();
+    if (data.branches && data.branches.length > 0) {
+      select.innerHTML = data.branches.map(b => 
+        `<option value="${b.id}">${b.name} &bull; ${b.location} (${b.code})</option>`
+      ).join('');
+    } else {
+      select.innerHTML = '<option value="">No branches configured yet (Add a branch first)</option>';
+    }
+  } catch (err) {
+    select.innerHTML = '<option value="BR-001">Main Branch (Default)</option>';
+  }
 };
 
 window.closeCreateBranchManagerModal = function() {

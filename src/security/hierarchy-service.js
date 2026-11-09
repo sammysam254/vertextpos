@@ -1,4 +1,5 @@
 const db = require('../db/sqlite-store');
+const supabase = require('../db/supabase-client');
 const CryptoUtils = require('./crypto-utils');
 
 /**
@@ -117,6 +118,89 @@ class HierarchyService {
         defaultBranchId: branchId
       }
     };
+  }
+
+  /**
+   * Business Owner (or Business Admin) creates a new branch for their supermarket.
+   */
+  static createBranch({
+    creatorRole,
+    creatorTenantId,
+    code,
+    name,
+    location,
+    phone
+  }) {
+    if (creatorRole !== 'owner' && creatorRole !== 'admin') {
+      return {
+        success: false,
+        error: 'FORBIDDEN',
+        message: 'Only the Business Owner or Business Admin can create new supermarket branches.'
+      };
+    }
+
+    if (!name || !location) {
+      return {
+        success: false,
+        error: 'MISSING_FIELDS',
+        message: 'Branch name and location are required.'
+      };
+    }
+
+    const cleanCode = (code || `BR-${name.slice(0, 3).toUpperCase()}-${Date.now().toString().slice(-3)}`).trim().toUpperCase();
+    const branchId = `BR-${creatorTenantId.slice(-4)}-${cleanCode}`;
+    const registerId = `REG-${cleanCode}-01`;
+
+    const existing = db.queryOne('SELECT id FROM branches WHERE tenant_id = ? AND (code = ? OR name = ?)', [creatorTenantId, cleanCode, name]);
+    if (existing) {
+      return { success: false, error: 'BRANCH_EXISTS', message: 'A branch with this code or name already exists in your supermarket.' };
+    }
+
+    db.transaction(() => {
+      // 1. Insert Branch
+      db.run(
+        `INSERT INTO branches (id, tenant_id, code, name, location, phone, status)
+         VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE')`,
+        [branchId, creatorTenantId, cleanCode, name, location, phone || '']
+      );
+
+      // 2. Insert Default Till / Register for this branch
+      db.run(
+        `INSERT INTO registers (id, tenant_id, branch_id, code, name, printer_type, status)
+         VALUES (?, ?, ?, 'TILL-01', ?, 'ESC_POS_80MM', 'ONLINE')`,
+        [registerId, creatorTenantId, branchId, `${name} Till 1`]
+      );
+    });
+
+    return {
+      success: true,
+      message: `Branch "${name}" (${cleanCode}) successfully created at ${location}.`,
+      branch: {
+        id: branchId,
+        code: cleanCode,
+        name,
+        location,
+        phone: phone || '',
+        status: 'ACTIVE',
+        registerId
+      }
+    };
+  }
+
+  /**
+   * Retrieves all branches for a specific supermarket tenant.
+   */
+  static getBranches({ tenantId }) {
+    return db.queryAll(
+      `SELECT b.*, 
+        (SELECT COUNT(r.id) FROM registers r WHERE r.branch_id = b.id) as register_count,
+        (SELECT COUNT(s.id) FROM sales s WHERE s.branch_id = b.id AND s.status = 'COMPLETED') as sales_count,
+        COALESCE((SELECT SUM(s.total_kes) FROM sales s WHERE s.branch_id = b.id AND s.status = 'COMPLETED'), 0) as total_revenue_kes
+       FROM branches b 
+       WHERE b.tenant_id = ? 
+       ORDER BY b.created_at ASC, b.name ASC`,
+      [tenantId]
+    );
   }
 
   /**

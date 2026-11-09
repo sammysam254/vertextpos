@@ -5,6 +5,7 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/*.db-journal
+data/*.tmp.*
 scratch/
 *.log
 .DS_Store

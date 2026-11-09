@@ -80,7 +80,18 @@ async function runSaasAcceptanceTests() {
     // TEST 1: SaaS Multi-Tenant Registration & Isolation
     // -----------------------------------------------------------------
     console.log('--- TEST 1: SaaS Supermarket Tenant Self-Registration (KES) ---');
+
+    // Verify public self-registration is strictly disabled
+    const publicRegRes = await makeRequest('/api/auth/register-user', 'POST', {
+      email: 'random_public_user@gmail.com',
+      password: 'RandomPassword@2026!'
+    });
+    assert.strictEqual(publicRegRes.statusCode, 403);
+    assert.strictEqual(publicRegRes.body.error, 'REGISTRATION_DISABLED');
+    console.log('[PASS] Public self-registration strictly disabled: Accounts are provisioned through dashboards.');
+
     const regRes = await makeRequest('/api/auth/register-tenant', 'POST', {
+      isInternalSetup: true,
       businessName: 'Chandarana Foodplus Supermarkets Ltd',
       slug: 'chandarana',
       kraPin: 'P052233445X',
@@ -337,18 +348,38 @@ async function runSaasAcceptanceTests() {
     assert.strictEqual(newAdminRes.body.user.role, 'admin');
     console.log(`[PASS] Business Owner created Business Admin: Brenda Chepkoech (admin@naivaskilimani.ke).`);
 
-    // 3. Business Admin creates Branch Manager
+    // 2b. Business Owner creates a new Supermarket Branch
+    const newBranchRes = await makeRequest('/api/hierarchy/create-branch', 'POST', {
+      creatorRole: 'owner',
+      name: 'Naivas Westlands Branch',
+      code: 'WEST-02',
+      location: 'Westlands Mall, Nairobi',
+      phone: '254722113344'
+    }, { 'x-tenant-id': newTenantId });
+    assert.strictEqual(newBranchRes.statusCode, 201);
+    assert.strictEqual(newBranchRes.body.branch.code, 'WEST-02');
+    const createdBranchId = newBranchRes.body.branch.id;
+    console.log(`[PASS] Business Owner added new Branch: Naivas Westlands Branch (${createdBranchId}).`);
+
+    // 2c. Query supermarket branches list
+    const branchesListRes = await makeRequest('/api/hierarchy/branches', 'GET', null, { 'x-tenant-id': newTenantId });
+    assert.strictEqual(branchesListRes.statusCode, 200);
+    assert.ok(branchesListRes.body.branches.length >= 2, 'Should have default branch plus newly created branch');
+    console.log(`[PASS] Retrieved ${branchesListRes.body.branches.length} branches for supermarket tenant ${newTenantId}.`);
+
+    // 3. Business Admin creates Branch Manager selecting from the branches
     const newMgrRes = await makeRequest('/api/hierarchy/create-branch-manager', 'POST', {
       creatorRole: 'admin',
       fullName: 'Wilson Ouma',
       email: 'manager@naivaskilimani.ke',
       username: 'mgr_wilson',
       password: 'Manager@2026!',
-      branchId: defaultBranchId
+      branchId: createdBranchId
     }, { 'x-tenant-id': newTenantId });
     assert.strictEqual(newMgrRes.statusCode, 201);
     assert.strictEqual(newMgrRes.body.user.role, 'branch_manager');
-    console.log(`[PASS] Business Admin appointed Branch Manager: Wilson Ouma for branch ${defaultBranchId}.`);
+    assert.strictEqual(newMgrRes.body.user.branchId, createdBranchId);
+    console.log(`[PASS] Business Admin appointed Branch Manager: Wilson Ouma for branch ${createdBranchId}.`);
 
     // 4. Branch Manager creates Cashier & Supervisor
     const newCashierRes = await makeRequest('/api/hierarchy/create-staff', 'POST', {

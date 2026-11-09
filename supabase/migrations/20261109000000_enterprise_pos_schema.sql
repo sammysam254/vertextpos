@@ -224,3 +224,25 @@ CREATE POLICY tenant_isolation_products ON products
     FOR ALL
     USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
 
+-- =========================================================================
+-- 14. SEED SAAS SUPER ADMIN (Online Cloud First)
+-- Email: sammyseth260@gmail.com
+-- Role: super_admin (Elevated privileges to create Business Owners)
+-- =========================================================================
+INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions, is_active)
+VALUES (
+    uuid_generate_v4(),
+    NULL,
+    'sammyseth',
+    'sammyseth260@gmail.com',
+    '33a39e877fc89dd7dffba766c6baecf109b0b4ae8a032fcfc526a0f6a2083db18e55e0a0ba6db3c7b275bf46ae72e2cfc053c84aa8e05f63d7634f40f04f0d7e',
+    '2a2656d0d210ae67',
+    'Sammy Seth (SaaS Super Admin)',
+    '+254700000000',
+    'super_admin',
+    NULL,
+    '["ALL_SAAS_CONTROL", "MANAGE_TENANTS", "CONFIGURE_DARAJA", "VIEW_FINANCIALS"]'::jsonb,
+    TRUE
+) ON CONFLICT (email) DO NOTHING;
+
+

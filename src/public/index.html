@@ -28,17 +28,7 @@
         <p class="login-subtitle">Enterprise Cloud Supermarket SaaS &bull; Currency: KES &bull; Safaricom M-Pesa Daraja 2.0 &bull; KRA eTIMS &bull; Supabase Sync</p>
       </div>
 
-      <!-- Auth Mode Tabs (Sign In / Register) -->
-      <div class="auth-tabs-tray">
-        <button type="button" id="tabBtnSignIn" class="auth-tab-btn active" onclick="window.switchAuthTab('signin')">
-          Sign In
-        </button>
-        <button type="button" id="tabBtnSignUp" class="auth-tab-btn" onclick="window.switchAuthTab('signup')">
-          Register New Account / Supermarket
-        </button>
-      </div>
-
-      <!-- Sign In Form -->
+      <!-- Single Secure Sign In Form (Hierarchy Provisioning Only) -->
       <form id="frmLogin" onsubmit="window.handleLoginFormSubmit(event)" class="login-form">
         <div class="form-group">
           <label for="txtLoginEmail">Email Address or Username:</label>
@@ -47,7 +37,7 @@
               <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
               <polyline points="22,6 12,13 2,6"/>
             </svg>
-            <input type="text" id="txtLoginEmail" placeholder="sammyseth260@gmail.com or cashier@metromart.ke" required autocomplete="username" oninput="window.checkSuperAdminBadge(this.value)">
+            <input type="text" id="txtLoginEmail" placeholder="sammyseth260@gmail.com or staff@store.ke" required autocomplete="username" oninput="window.checkSuperAdminBadge(this.value)">
           </div>
           <div id="superAdminDetectionBadge" class="super-admin-detected" style="display:none;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
@@ -72,57 +62,11 @@
           <span class="btn-text">Sign In to Vertext POS</span>
           <span class="spinner-inline" style="display:none;"></span>
         </button>
-      </form>
 
-      <!-- Self-Service Registration Form -->
-      <form id="frmRegister" onsubmit="window.handleRegisterFormSubmit(event)" class="login-form" style="display:none;">
-        <div class="form-group">
-          <label for="txtRegEmail">Work Email Address:</label>
-          <div class="input-with-svg">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-            <input type="email" id="txtRegEmail" placeholder="sammyseth260@gmail.com or owner@mysupermarket.ke" required oninput="window.checkRegSuperAdminBadge(this.value)">
-          </div>
-          <div id="regSuperAdminBadge" class="super-admin-detected" style="display:none;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            Will Register as SaaS Super Admin (sammyseth260@gmail.com)
-          </div>
+        <div style="margin-top: 18px; text-align: center; font-size: 0.78rem; color: #64748b; line-height: 1.5;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 4px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <strong>Enterprise Cloud SaaS:</strong> Public registration is disabled. Supermarket owners and staff accounts are provisioned hierarchically by store management through the dashboard.
         </div>
-
-        <div class="form-row">
-          <div class="form-group flex-1">
-            <label for="txtRegFullName">Full Name:</label>
-            <input type="text" id="txtRegFullName" class="form-control" placeholder="Sammy Seth" required>
-          </div>
-          <div class="form-group flex-1">
-            <label for="txtRegPhone">Mobile Phone (M-Pesa):</label>
-            <input type="text" id="txtRegPhone" class="form-control" placeholder="2547XXXXXXXX">
-          </div>
-        </div>
-
-        <div class="form-group" id="groupRegBusiness">
-          <label for="txtRegBusinessName">Supermarket Business Name:</label>
-          <input type="text" id="txtRegBusinessName" class="form-control" placeholder="e.g. Cleanshelf Supermarkets Ltd">
-          <small class="helper-text">You will assume the role of Business Owner with full POS command.</small>
-        </div>
-
-        <div class="form-row" id="groupRegLocation">
-          <div class="form-group flex-1">
-            <label for="txtRegLocation">Flagship Store Location:</label>
-            <input type="text" id="txtRegLocation" class="form-control" placeholder="e.g. Nairobi CBD">
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label for="txtRegPassword">Account Password:</label>
-          <input type="password" id="txtRegPassword" class="form-control" placeholder="••••••••••••" required>
-        </div>
-
-        <div id="registerErrorBanner" class="alert-banner alert-danger" style="display:none;"></div>
-
-        <button type="submit" id="btnRegSubmit" class="btn btn-primary btn-block btn-lg">
-          <span class="btn-text">Create Account &amp; Launch</span>
-          <span class="spinner-inline" style="display:none;"></span>
-        </button>
       </form>
     </div>
   </div>
@@ -324,6 +268,10 @@
               <p class="section-subtitle">Full administrative control of your retail chain, revenue, branches, and appointed management.</p>
             </div>
             <div class="action-btn-group">
+              <button class="btn btn-success" onclick="window.openAddBranchModal()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                + Add Supermarket Branch
+              </button>
               <button class="btn btn-primary" onclick="window.openCreateAdminModal()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 + Appoint Business Admin
@@ -1415,6 +1363,46 @@
 
           <button type="submit" id="btnSubmitOwner" class="btn btn-primary btn-block btn-lg mt-3">
             Deploy Supermarket Tenant &amp; Issue Owner Account
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: BUSINESS OWNER ADDS NEW BRANCH -->
+  <div id="modalCreateBranch" class="modal-backdrop" style="display:none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          <h3>Add Supermarket Branch</h3>
+        </div>
+        <button class="modal-close-btn" onclick="window.closeAddBranchModal()">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <p class="section-subtitle">Create an additional supermarket branch. Each branch maintains dedicated cashiers, tills, and inventory tracking.</p>
+        <form onsubmit="window.handleCreateBranchSubmit(event)">
+          <div class="form-group">
+            <label>Branch Name:</label>
+            <input type="text" id="nbrName" class="form-control" placeholder="e.g. Westlands Mall Supermarket" required>
+          </div>
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label>Branch Code:</label>
+              <input type="text" id="nbrCode" class="form-control" placeholder="e.g. WEST-01" required>
+            </div>
+            <div class="form-group flex-1">
+              <label>Phone / Till Contact:</label>
+              <input type="text" id="nbrPhone" class="form-control" placeholder="2547XXXXXXXX">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Physical Location / Mall / Town:</label>
+            <input type="text" id="nbrLocation" class="form-control" placeholder="e.g. Ground Floor, Westlands Mall, Nairobi" required>
+          </div>
+          <button type="submit" class="btn btn-success btn-block btn-lg mt-3">
+            Create Supermarket Branch
           </button>
         </form>
       </div>

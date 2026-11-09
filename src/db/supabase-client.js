@@ -1,19 +1,21 @@
 /**
- * Supabase Client Integration Adapter for Enterprise Supermarket POS SaaS.
+ * Supabase Client Integration Adapter for Vertext POS SaaS.
  * 
  * Supports:
- * 1. Remote Supabase Cloud / Self-Hosted Supabase instance when SUPABASE_URL & SUPABASE_KEY are provided.
- * 2. Embedded high-performance engine implementing the exact same Supabase PostgREST query builder API.
+ * 1. Direct Online Cloud PostgREST connection when SUPABASE_URL & SUPABASE_KEY are provided in .env / Netlify.
+ * 2. Embedded engine implementing the exact same Supabase PostgREST query builder API for local testing.
  */
 
 const db = require('./sqlite-store');
 
 class SupabaseQueryBuilder {
-  constructor(table) {
+  constructor(table, client = null) {
     this.table = table;
+    this.client = client;
     this.selectColumns = '*';
     this.whereClauses = [];
     this.whereParams = [];
+    this.filterParams = {};
     this.orderByClause = '';
     this.limitCount = null;
   }
@@ -26,24 +28,28 @@ class SupabaseQueryBuilder {
   eq(column, value) {
     this.whereClauses.push(`${column} = ?`);
     this.whereParams.push(value);
+    this.filterParams[column] = `eq.${value}`;
     return this;
   }
 
   neq(column, value) {
     this.whereClauses.push(`${column} != ?`);
     this.whereParams.push(value);
+    this.filterParams[column] = `neq.${value}`;
     return this;
   }
 
   gt(column, value) {
     this.whereClauses.push(`${column} > ?`);
     this.whereParams.push(value);
+    this.filterParams[column] = `gt.${value}`;
     return this;
   }
 
   lt(column, value) {
     this.whereClauses.push(`${column} < ?`);
     this.whereParams.push(value);
+    this.filterParams[column] = `lt.${value}`;
     return this;
   }
 
@@ -71,6 +77,32 @@ class SupabaseQueryBuilder {
   }
 
   async _executeSelect() {
+    // If remote cloud credentials configured, attempt live PostgREST call
+    if (this.client && this.client.isRemote) {
+      try {
+        const queryParams = new URLSearchParams({ select: this.selectColumns });
+        Object.entries(this.filterParams).forEach(([k, v]) => queryParams.append(k, v));
+        if (this.limitCount) queryParams.append('limit', this.limitCount);
+
+        const url = `${this.client.url}/rest/v1/${this.table}?${queryParams.toString()}`;
+        const res = await fetch(url, {
+          headers: {
+            'apikey': this.client.key,
+            'Authorization': `Bearer ${this.client.key}`,
+            'Accept': 'application/json'
+          }
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          return { data, error: null };
+        }
+      } catch (err) {
+        console.warn(`[SUPABASE CLOUD] Direct REST select fallback: ${err.message}`);
+      }
+    }
+
+    // Local execution engine
     let sql = `SELECT ${this.selectColumns} FROM ${this.table}`;
     if (this.whereClauses.length > 0) {
       sql += ` WHERE ${this.whereClauses.join(' AND ')}`;
@@ -92,13 +124,38 @@ class SupabaseQueryBuilder {
 
   async insert(recordOrRecords) {
     const records = Array.isArray(recordOrRecords) ? recordOrRecords : [recordOrRecords];
+
+    // If remote cloud credentials configured, push live to Supabase PostgREST
+    if (this.client && this.client.isRemote) {
+      try {
+        const url = `${this.client.url}/rest/v1/${this.table}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'apikey': this.client.key,
+            'Authorization': `Bearer ${this.client.key}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify(recordOrRecords)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          return { data, error: null };
+        }
+      } catch (err) {
+        console.warn(`[SUPABASE CLOUD] Direct REST insert warning: ${err.message}`);
+      }
+    }
+
+    // Local database storage
     try {
       db.transaction(() => {
         records.forEach(record => {
           const keys = Object.keys(record);
           const placeholders = keys.map(() => '?').join(', ');
           const values = keys.map(k => record[k]);
-          const sql = `INSERT INTO ${this.table} (${keys.join(', ')}) VALUES (${placeholders})`;
+          const sql = `INSERT OR REPLACE INTO ${this.table} (${keys.join(', ')}) VALUES (${placeholders})`;
           db.run(sql, values);
         });
       });
@@ -109,6 +166,31 @@ class SupabaseQueryBuilder {
   }
 
   async update(values) {
+    // If remote cloud credentials configured, push live to Supabase PostgREST
+    if (this.client && this.client.isRemote) {
+      try {
+        const queryParams = new URLSearchParams();
+        Object.entries(this.filterParams).forEach(([k, v]) => queryParams.append(k, v));
+        const url = `${this.client.url}/rest/v1/${this.table}?${queryParams.toString()}`;
+        const res = await fetch(url, {
+          method: 'PATCH',
+          headers: {
+            'apikey': this.client.key,
+            'Authorization': `Bearer ${this.client.key}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify(values)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          return { data, error: null };
+        }
+      } catch (err) {
+        console.warn(`[SUPABASE CLOUD] Direct REST update warning: ${err.message}`);
+      }
+    }
+
     const keys = Object.keys(values);
     const setClauses = keys.map(k => `${k} = ?`).join(', ');
     const params = keys.map(k => values[k]);
@@ -143,14 +225,14 @@ class SupabaseQueryBuilder {
 
 class SupabaseClient {
   constructor() {
-    this.url = process.env.SUPABASE_URL || 'https://mock-enterprise.supabase.co';
-    this.key = process.env.SUPABASE_KEY || 'mock-anon-key-2026';
-    this.isRemote = !!(process.env.SUPABASE_URL && process.env.SUPABASE_KEY && !process.env.SUPABASE_URL.includes('mock'));
-    console.log(`[SUPABASE] Initialized database adapter (Mode: ${this.isRemote ? 'Remote Cloud' : 'High-Performance Engine'})`);
+    this.url = process.env.SUPABASE_URL || '';
+    this.key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || '';
+    this.isRemote = !!(this.url && this.key && !this.url.includes('mock'));
+    console.log(`[SUPABASE] Initialized database adapter (Mode: ${this.isRemote ? 'Live Cloud PostgREST (' + this.url + ')' : 'Local Engine Synced'})`);
   }
 
   from(table) {
-    return new SupabaseQueryBuilder(table);
+    return new SupabaseQueryBuilder(table, this);
   }
 
   // Auth helper matching Supabase Auth API
@@ -167,4 +249,3 @@ class SupabaseClient {
 }
 
 module.exports = new SupabaseClient();
-
