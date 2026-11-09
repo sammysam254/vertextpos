@@ -81,14 +81,17 @@ async function runSaasAcceptanceTests() {
     // -----------------------------------------------------------------
     console.log('--- TEST 1: SaaS Supermarket Tenant Self-Registration (KES) ---');
 
-    // Verify public self-registration is strictly disabled
-    const publicRegRes = await makeRequest('/api/auth/register-user', 'POST', {
-      email: 'random_public_user@gmail.com',
-      password: 'RandomPassword@2026!'
+    // Verify account creation directly with Supabase
+    const userRegRes = await makeRequest('/api/auth/register-user', 'POST', {
+      email: 'chandarana_owner@gmail.com',
+      password: 'Chandarana@2026!',
+      fullName: 'Chandarana Owner',
+      businessName: 'Chandarana Express Supermarket',
+      location: 'Nairobi'
     });
-    assert.strictEqual(publicRegRes.statusCode, 403);
-    assert.strictEqual(publicRegRes.body.error, 'REGISTRATION_DISABLED');
-    console.log('[PASS] Public self-registration strictly disabled: Accounts are provisioned through dashboards.');
+    assert.strictEqual(userRegRes.statusCode, 201);
+    assert.strictEqual(userRegRes.body.success, true);
+    console.log('[PASS] Account creation enabled and handled directly through Supabase.');
 
     const regRes = await makeRequest('/api/auth/register-tenant', 'POST', {
       isInternalSetup: true,

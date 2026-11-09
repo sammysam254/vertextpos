@@ -157,16 +157,26 @@ window.handleRegisterFormSubmit = async function(e) {
     hideLoading();
 
     if (data.success) {
-      STATE.token = data.token;
-      STATE.currentUser = data.user;
-      STATE.currentTenantId = data.tenant ? data.tenant.id : (data.user.role === 'super_admin' ? 'GLOBAL' : 'tenant_metromart');
+      if (data.token && data.user) {
+        STATE.token = data.token;
+        STATE.currentUser = data.user;
+        STATE.currentTenantId = data.tenant ? data.tenant.id : (data.user.role === 'super_admin' ? 'GLOBAL' : 'tenant_metromart');
 
-      sessionStorage.setItem('vertext_token', data.token);
-      sessionStorage.setItem('vertext_user', JSON.stringify(data.user));
-      sessionStorage.setItem('vertext_tenant_id', STATE.currentTenantId);
+        sessionStorage.setItem('vertext_token', data.token);
+        sessionStorage.setItem('vertext_user', JSON.stringify(data.user));
+        sessionStorage.setItem('vertext_tenant_id', STATE.currentTenantId);
 
-      onLoginSuccess(data.user);
-      showToast(`Welcome ${data.user.fullName}! Logged in as ${data.user.role.toUpperCase()}`, 'success');
+        onLoginSuccess(data.user);
+        showToast(`Welcome ${data.user.fullName}! Account created in Supabase`, 'success');
+      } else {
+        window.switchAuthTab('signin');
+        document.getElementById('txtLoginEmail').value = email;
+        const loginErr = document.getElementById('loginErrorBanner');
+        loginErr.className = 'alert-banner alert-success';
+        loginErr.style.display = 'block';
+        loginErr.innerHTML = `<strong>Account Created in Supabase!</strong><br>${data.message || 'Please check your email or confirm your user in Supabase to sign in.'}`;
+        showToast('Account created in Supabase! Please sign in.', 'success');
+      }
     } else {
       errBanner.innerText = data.message || 'Registration failed.';
       errBanner.style.display = 'block';

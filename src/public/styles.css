@@ -759,9 +759,20 @@ body {
 }
 
 @keyframes pulseGreen {
-  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.7); }
-  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(22, 163, 74, 0); }
-  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.7);
+  }
+
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(22, 163, 74, 0);
+  }
+
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0);
+  }
 }
 
 .topbar-right {
@@ -1281,10 +1292,41 @@ body {
   background: #f8fafc;
 }
 
-.badge-success { background: #dcfce7; color: #166534; font-weight: 700; padding: 3px 8px; border-radius: 4px; font-size: 0.72rem; }
-.badge-warning { background: #fef3c7; color: #92400e; font-weight: 700; padding: 3px 8px; border-radius: 4px; font-size: 0.72rem; }
-.badge-danger { background: #fee2e2; color: #991b1b; font-weight: 700; padding: 3px 8px; border-radius: 4px; font-size: 0.72rem; }
-.badge-primary { background: #dbeafe; color: #1e40af; font-weight: 700; padding: 3px 8px; border-radius: 4px; font-size: 0.72rem; }
+.badge-success {
+  background: #dcfce7;
+  color: #166534;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+}
+
+.badge-warning {
+  background: #fef3c7;
+  color: #92400e;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+}
+
+.badge-danger {
+  background: #fee2e2;
+  color: #991b1b;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+}
+
+.badge-primary {
+  background: #dbeafe;
+  color: #1e40af;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+}
 
 /* Shift Dashboard Grid */
 .shift-dashboard-grid {
@@ -1327,30 +1369,85 @@ body {
   text-decoration: none;
 }
 
-.btn-primary { background: var(--primary); color: #ffffff; }
-.btn-primary:hover { background: var(--primary-hover); }
+.btn-primary {
+  background: var(--primary);
+  color: #ffffff;
+}
 
-.btn-secondary { background: #f1f5f9; color: var(--text-main); border-color: var(--border-light); }
-.btn-secondary:hover { background: #e2e8f0; }
+.btn-primary:hover {
+  background: var(--primary-hover);
+}
 
-.btn-outline { background: transparent; color: var(--text-main); border-color: var(--border-light); }
-.btn-outline:hover { background: #f1f5f9; }
+.btn-secondary {
+  background: #f1f5f9;
+  color: var(--text-main);
+  border-color: var(--border-light);
+}
 
-.btn-outline-danger { background: transparent; color: var(--danger); border-color: #fca5a5; }
-.btn-outline-danger:hover { background: #fef2f2; }
+.btn-secondary:hover {
+  background: #e2e8f0;
+}
 
-.btn-danger { background: var(--danger); color: #ffffff; }
-.btn-danger:hover { background: #b91c1c; }
+.btn-outline {
+  background: transparent;
+  color: var(--text-main);
+  border-color: var(--border-light);
+}
 
-.btn-warning { background: var(--warning); color: #ffffff; }
-.btn-warning:hover { background: #b45309; }
+.btn-outline:hover {
+  background: #f1f5f9;
+}
 
-.btn-success { background: var(--mpesa); color: #ffffff; }
-.btn-success:hover { background: var(--mpesa-hover); }
+.btn-outline-danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: #fca5a5;
+}
 
-.btn-sm { padding: 4px 10px; font-size: 0.78rem; }
-.btn-lg { padding: 12px 20px; font-size: 0.95rem; }
-.btn-block { width: 100%; }
+.btn-outline-danger:hover {
+  background: #fef2f2;
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.btn-danger:hover {
+  background: #b91c1c;
+}
+
+.btn-warning {
+  background: var(--warning);
+  color: #ffffff;
+}
+
+.btn-warning:hover {
+  background: #b45309;
+}
+
+.btn-success {
+  background: var(--mpesa);
+  color: #ffffff;
+}
+
+.btn-success:hover {
+  background: var(--mpesa-hover);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 0.78rem;
+}
+
+.btn-lg {
+  padding: 12px 20px;
+  font-size: 0.95rem;
+}
+
+.btn-block {
+  width: 100%;
+}
 
 /* Form Controls */
 .form-group {
@@ -1386,7 +1483,9 @@ body {
   gap: 12px;
 }
 
-.flex-1 { flex: 1; }
+.flex-1 {
+  flex: 1;
+}
 
 .helper-text {
   font-size: 0.72rem;
@@ -1516,7 +1615,9 @@ body {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .loading-text {
@@ -1542,23 +1643,59 @@ body {
   animation: slideUp 0.25s ease;
 }
 
-.toast-popup.toast-success { background: #166534; }
-.toast-popup.toast-error { background: #991b1b; }
-.toast-popup.toast-warning { background: #92400e; }
+.toast-popup.toast-success {
+  background: #166534;
+}
+
+.toast-popup.toast-error {
+  background: #991b1b;
+}
+
+.toast-popup.toast-warning {
+  background: #92400e;
+}
 
 @keyframes slideUp {
-  from { transform: translateY(20px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 /* Utilities */
-.mt-4 { margin-top: 24px; }
-.text-center { text-align: center; }
-.text-primary { color: var(--primary); }
-.text-success { color: var(--mpesa); }
-.text-danger { color: var(--danger); }
-.text-warning { color: var(--warning); }
-.text-mpesa { color: var(--mpesa); font-weight: bold; }
+.mt-4 {
+  margin-top: 24px;
+}
+
+.text-center {
+  text-align: center;
+}
+
+.text-primary {
+  color: var(--primary);
+}
+
+.text-success {
+  color: var(--mpesa);
+}
+
+.text-danger {
+  color: var(--danger);
+}
+
+.text-warning {
+  color: var(--warning);
+}
+
+.text-mpesa {
+  color: var(--mpesa);
+  font-weight: bold;
+}
 
 /* ========================================================================= */
 /* AUTHENTIC SUPERMARKET THERMAL RECEIPT (80MM & 58MM SLIP)                  */
@@ -1797,7 +1934,8 @@ body {
     margin: 0mm;
   }
 
-  html, body {
+  html,
+  body {
     background: #ffffff !important;
     margin: 0 !important;
     padding: 0 !important;

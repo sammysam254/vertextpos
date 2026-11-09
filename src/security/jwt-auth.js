@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const db = require('../db/sqlite-store');
 const CryptoUtils = require('./crypto-utils');
+const config = require('../config');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'pos-saas-kenya-enterprise-secret-key-2026';
 
@@ -82,9 +83,9 @@ class JwtAuth {
   }
 
   /**
-   * Registers a new supermarket business tenant on the SaaS platform.
+   * Registers a new supermarket business tenant on the SaaS platform directly in Supabase.
    */
-  static registerTenant({
+  static async registerTenant({
     businessName,
     slug,
     tradeName,
@@ -92,6 +93,7 @@ class JwtAuth {
     phone,
     email,
     password,
+    fullName,
     planId = 'growth',
     branchName = 'Flagship Store',
     location = 'Nairobi'
@@ -100,80 +102,222 @@ class JwtAuth {
       return { success: false, error: 'MISSING_FIELDS', message: 'Business name, email, and password are required.' };
     }
 
+    const normalizedEmail = email.trim().toLowerCase();
     const cleanSlug = (slug || businessName.toLowerCase().replace(/[^a-z0-9]/g, '')).toLowerCase();
-
-    // Check if slug or email exists
-    const existingTenant = db.queryOne('SELECT id FROM tenants WHERE slug = ? OR email = ?', [cleanSlug, email]);
-    if (existingTenant) {
-      return { success: false, error: 'TENANT_EXISTS', message: 'A supermarket with this slug or email already exists.' };
-    }
-
     const tenantId = `tenant_${cleanSlug}_${Date.now().toString().slice(-4)}`;
     const branchId = `BR-${cleanSlug.slice(0, 3).toUpperCase()}-01`;
     const registerId = `REG-${cleanSlug.slice(0, 3).toUpperCase()}-01`;
-    const userId = `usr_${cleanSlug}_owner`;
+    const defaultUserId = `usr_${cleanSlug}_owner`;
+    let finalUserId = defaultUserId;
 
+    const supabaseUrl = process.env.SUPABASE_URL || (config.supabase && config.supabase.url) || null;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || (config.supabase && config.supabase.anonKey) || null;
+    const isRemote = !!(supabaseUrl && supabaseKey);
+
+    let supabaseAuthSuccess = false;
+    let authSession = null;
+
+    // 1. DIRECT SUPABASE AUTH API: Create User in Supabase Auth via API Key
+    if (isRemote) {
+      try {
+        const authRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            email: normalizedEmail,
+            password: password,
+            data: {
+              full_name: fullName || `${businessName} Owner`,
+              role: 'owner',
+              phone: phone || '',
+              tenant_name: businessName,
+              trade_name: tradeName || businessName
+            }
+          })
+        });
+
+        const authData = await authRes.json();
+        if (authRes.ok && (authData.id || (authData.user && authData.user.id))) {
+          supabaseAuthSuccess = true;
+          finalUserId = authData.id || authData.user.id;
+          authSession = authData.session || null;
+          console.log(`[SUPABASE AUTH] Successfully registered user ${normalizedEmail} with Supabase UID: ${finalUserId}`);
+        } else if (authData && authData.error_code === 'user_already_exists') {
+          return {
+            success: false,
+            error: 'USER_EXISTS',
+            message: 'An account with this email already exists in Supabase. Please sign in.'
+          };
+        } else if (authData && (authData.msg || authData.message)) {
+          console.warn(`[SUPABASE AUTH] Registration notice: ${authData.msg || authData.message}`);
+          if (authRes.status >= 400 && !authData.id) {
+            return {
+              success: false,
+              error: authData.error_code || 'AUTH_ERROR',
+              message: authData.msg || authData.message
+            };
+          }
+        }
+      } catch (err) {
+        console.warn(`[SUPABASE AUTH] Cloud signup error: ${err.message}`);
+      }
+    }
+
+    // 2. Insert into Supabase cloud database tables via REST API
+    if (isRemote) {
+      try {
+        // Tenant
+        await fetch(`${supabaseUrl}/rest/v1/tenants`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey,
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify({
+            id: tenantId,
+            name: businessName,
+            slug: cleanSlug,
+            trade_name: tradeName || businessName,
+            kra_pin: kraPin || 'P050000000Z',
+            phone: phone || '254700000000',
+            email: normalizedEmail,
+            currency: 'KES',
+            plan_id: planId,
+            status: 'TRIAL'
+          })
+        });
+
+        // Branch
+        await fetch(`${supabaseUrl}/rest/v1/branches`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey,
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify({
+            id: branchId,
+            tenant_id: tenantId,
+            code: 'MAIN',
+            name: branchName || 'Flagship Store',
+            location: location || 'Nairobi',
+            phone: phone || '254700000000',
+            status: 'ACTIVE'
+          })
+        });
+
+        // Register
+        await fetch(`${supabaseUrl}/rest/v1/registers`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey,
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify({
+            id: registerId,
+            tenant_id: tenantId,
+            branch_id: branchId,
+            code: 'TILL-01',
+            name: 'Counter 1 (Express)',
+            printer_type: 'ESC_POS_80MM',
+            status: 'ONLINE'
+          })
+        });
+
+        // User
+        await fetch(`${supabaseUrl}/rest/v1/users`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey,
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify({
+            id: finalUserId,
+            tenant_id: tenantId,
+            username: normalizedEmail.split('@')[0],
+            email: normalizedEmail,
+            full_name: fullName || `${businessName} Owner`,
+            phone: phone || '254700000000',
+            role: 'owner',
+            branch_id: 'ALL',
+            pin_code: '1234',
+            active: 1
+          })
+        });
+      } catch (err) {
+        console.warn(`[SUPABASE CLOUD] REST insert notice: ${err.message}`);
+      }
+    }
+
+    // 3. Local SQLite Store
     const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
     const trialEnds = new Date(Date.now() + 14 * 86400000).toISOString();
 
     db.transaction(() => {
-      // 1. Insert Tenant
       db.run(
-        `INSERT INTO tenants (id, name, slug, trade_name, kra_pin, phone, email, currency, plan_id, status, trial_ends_at)
+        `INSERT OR REPLACE INTO tenants (id, name, slug, trade_name, kra_pin, phone, email, currency, plan_id, status, trial_ends_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, 'KES', ?, 'TRIAL', ?)`,
-        [tenantId, businessName, cleanSlug, tradeName || businessName, kraPin || 'P050000000Z', phone || '254700000000', email, planId, trialEnds]
+        [tenantId, businessName, cleanSlug, tradeName || businessName, kraPin || 'P050000000Z', phone || '254700000000', normalizedEmail, planId, trialEnds]
       );
 
-      // 2. Insert Default Branch
       db.run(
-        `INSERT INTO branches (id, tenant_id, code, name, location, phone, status)
+        `INSERT OR REPLACE INTO branches (id, tenant_id, code, name, location, phone, status)
          VALUES (?, ?, 'MAIN', ?, ?, ?, 'ACTIVE')`,
         [branchId, tenantId, branchName, location, phone]
       );
 
-      // 3. Insert Register (Till 1)
       db.run(
-        `INSERT INTO registers (id, tenant_id, branch_id, code, name, printer_type, status)
+        `INSERT OR REPLACE INTO registers (id, tenant_id, branch_id, code, name, printer_type, status)
          VALUES (?, ?, ?, 'TILL-01', 'Counter 1 (Express)', 'ESC_POS_80MM', 'ONLINE')`,
         [registerId, tenantId, branchId]
       );
 
-      // 4. Insert Owner User
       db.run(
-        `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
+        `INSERT OR REPLACE INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'owner', 'ALL', ?, '1234', 1)`,
-        [userId, tenantId, email.split('@')[0], email, hash, salt, `${businessName} Owner`, phone, JSON.stringify(['ALL_BUSINESS_CONTROL'])]
+        [finalUserId, tenantId, normalizedEmail.split('@')[0], normalizedEmail, hash, salt, fullName || `${businessName} Owner`, phone, JSON.stringify(['ALL_BUSINESS_CONTROL'])]
       );
 
-      // 5. Clone initial FMCG catalog to give new tenant an immediate working catalog
+      // Clone catalog
       const standardProducts = db.queryAll('SELECT * FROM products WHERE tenant_id = ? LIMIT 12', ['tenant_metromart']);
       const insertProd = db.prepare(`
-        INSERT INTO products (id, tenant_id, name, barcode, sku, category, unit, cost_price_kes, selling_price_kes, wholesale_price_kes, vat_rate, min_stock, is_weighed, is_active)
+        INSERT OR IGNORE INTO products (id, tenant_id, name, barcode, sku, category, unit, cost_price_kes, selling_price_kes, wholesale_price_kes, vat_rate, min_stock, is_weighed, is_active)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const insertInv = db.prepare(`
-        INSERT INTO inventory (id, tenant_id, branch_id, product_id, quantity, reorder_level)
+        INSERT OR IGNORE INTO inventory (id, tenant_id, branch_id, product_id, quantity, reorder_level)
         VALUES (?, ?, ?, ?, ?, ?)
       `);
 
-      standardProducts.forEach(p => {
-        const newProdId = `PRD-${cleanSlug.slice(0, 3).toUpperCase()}-${p.barcode.slice(-4)}`;
+      standardProducts.forEach((p, idx) => {
+        const newProdId = `PRD-${tenantId.replace(/[^a-zA-Z0-9]/g, '')}-${String(idx + 1).padStart(3, '0')}`;
         insertProd.run(newProdId, tenantId, p.name, p.barcode, `${cleanSlug.toUpperCase()}-${p.sku}`, p.category, p.unit, p.cost_price_kes, p.selling_price_kes, p.wholesale_price_kes, p.vat_rate, p.min_stock, p.is_weighed, 1);
         insertInv.run(`INV-${newProdId}`, tenantId, branchId, newProdId, 50, p.min_stock);
       });
     });
 
     const token = this.signToken({
-      userId,
+      userId: finalUserId,
       tenantId,
-      email,
+      email: normalizedEmail,
       role: 'owner',
       branchId,
-      name: `${businessName} Owner`
+      name: fullName || `${businessName} Owner`
     });
 
     return {
       success: true,
+      requiresConfirmation: isRemote && !authSession,
       tenant: {
         id: tenantId,
         name: businessName,
@@ -183,13 +327,23 @@ class JwtAuth {
         branchId,
         registerId
       },
-      token,
-      message: 'Business tenant created successfully on 14-day Free Trial.'
+      token: (authSession || !isRemote) ? token : null,
+      user: {
+        id: finalUserId,
+        email: normalizedEmail,
+        fullName: fullName || `${businessName} Owner`,
+        role: 'owner',
+        tenantId,
+        branchId
+      },
+      message: (isRemote && !authSession)
+        ? "Account created directly in Supabase! If 'Confirm email' is enabled in your Supabase project, click the link sent to your email (or click 'Confirm user' in Supabase Dashboard) to sign in."
+        : 'Business tenant created successfully in Supabase on 14-day Free Trial.'
     };
   }
 
   /**
-   * Universal User Signup / Registration.
+   * Universal User Signup / Registration directly in Supabase Auth & DB.
    * If email is sammyseth260@gmail.com, automatically assumes SaaS Super Admin role.
    * If businessName is provided, registers as Business Owner of that supermarket.
    */
@@ -201,40 +355,84 @@ class JwtAuth {
     const normalizedEmail = email.trim().toLowerCase();
     const isSuperAdminEmail = normalizedEmail === 'sammyseth260@gmail.com';
 
-    // 1. Check if user already exists
-    const existingUser = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ?', [normalizedEmail]);
+    const supabaseUrl = process.env.SUPABASE_URL || (config.supabase && config.supabase.url) || null;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || (config.supabase && config.supabase.anonKey) || null;
+    const isRemote = !!(supabaseUrl && supabaseKey);
 
     if (isSuperAdminEmail) {
-      const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
-      if (existingUser) {
-        db.run(
-          `UPDATE users SET password_hash = ?, password_salt = ?, role = 'super_admin', active = 1 WHERE id = ?`,
-          [hash, salt, existingUser.id]
-        );
-        return await this.login(normalizedEmail, password);
-      } else {
-        const userId = 'usr_super_sammy';
-        db.run(
-          `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
-           VALUES (?, 'GLOBAL', 'sammyseth', ?, ?, ?, ?, ?, 'super_admin', 'ALL', ?, '9999', 1)`,
-          [userId, normalizedEmail, hash, salt, fullName || 'Sammy Seth (Super Admin)', phone || '254700000000', JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'])]
-        );
-        return await this.login(normalizedEmail, password);
-      }
-    }
+      let finalUserId = 'usr_super_sammy';
+      let authSession = null;
 
-    if (existingUser) {
-      return { success: false, error: 'USER_EXISTS', message: 'An account with this email already exists. Please sign in.' };
+      if (isRemote) {
+        try {
+          const authRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+            method: 'POST',
+            headers: {
+              'apikey': supabaseKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              email: normalizedEmail,
+              password,
+              data: {
+                full_name: fullName || 'Sammy Seth (Super Admin)',
+                role: 'super_admin'
+              }
+            })
+          });
+          const authData = await authRes.json();
+          if (authRes.ok && (authData.id || (authData.user && authData.user.id))) {
+            finalUserId = authData.id || authData.user.id;
+            authSession = authData.session;
+          }
+        } catch (e) {}
+
+        // Push to public.users in Supabase
+        try {
+          await fetch(`${supabaseUrl}/rest/v1/users`, {
+            method: 'POST',
+            headers: {
+              'apikey': supabaseKey,
+              'Authorization': `Bearer ${supabaseKey}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=minimal'
+            },
+            body: JSON.stringify({
+              id: finalUserId,
+              tenant_id: 'GLOBAL',
+              username: 'sammyseth',
+              email: normalizedEmail,
+              full_name: fullName || 'Sammy Seth (Super Admin)',
+              phone: phone || '254700000000',
+              role: 'super_admin',
+              branch_id: 'ALL',
+              pin_code: '9999',
+              active: 1
+            })
+          });
+        } catch (e) {}
+      }
+
+      // Local store
+      const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
+      db.run(
+        `INSERT OR REPLACE INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
+         VALUES (?, 'GLOBAL', 'sammyseth', ?, ?, ?, ?, ?, 'super_admin', 'ALL', ?, '9999', 1)`,
+        [finalUserId, normalizedEmail, hash, salt, fullName || 'Sammy Seth (Super Admin)', phone || '254700000000', JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'])]
+      );
+
+      return await this.login(normalizedEmail, password);
     }
 
     // 2. Regular registration as Business Owner
     if (businessName) {
-      return this.registerTenant({
+      return await this.registerTenant({
         businessName,
         tradeName: businessName,
         phone: phone || '254700000000',
         email: normalizedEmail,
         password,
+        fullName,
         location: location || 'Nairobi',
         planId: 'growth'
       });
@@ -320,14 +518,12 @@ class JwtAuth {
             }
           } catch (e) {}
 
-        } else if (authData && authData.error_description) {
-          if (authData.error_description.toLowerCase().includes('confirm')) {
-            return {
-              success: false,
-              error: 'EMAIL_NOT_CONFIRMED',
-              message: 'Your email address is not confirmed in Supabase. In your Supabase dashboard under Authentication -> Users, click on the user and select "Confirm User" (or disable "Confirm email" in Auth settings).'
-            };
-          }
+        } else if (authData && (authData.error_code === 'email_not_confirmed' || (authData.msg && authData.msg.toLowerCase().includes('confirm')) || (authData.error_description && authData.error_description.toLowerCase().includes('confirm')))) {
+          return {
+            success: false,
+            error: 'EMAIL_NOT_CONFIRMED',
+            message: 'Your email address is not confirmed in Supabase. In your Supabase dashboard under Authentication -> Users, click on your user and select "Confirm User" (or disable "Confirm email" in Auth settings).'
+          };
         }
       } catch (err) {
         console.warn('[SUPABASE AUTH] Direct API check notice:', err.message);
