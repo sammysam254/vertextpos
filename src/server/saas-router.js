@@ -58,13 +58,13 @@ class SaasRouter {
             message: 'Public account registration is disabled. Staff accounts must be provisioned by store management through the dashboard.'
           });
         }
-        const result = JwtAuth.registerUser(body);
+        const result = await JwtAuth.registerUser(body);
         return this.sendJson(res, result.success ? 201 : 400, result);
       }
 
       if (pathname === '/api/auth/login' && req.method === 'POST') {
         const { emailOrUsername, password } = body;
-        const result = JwtAuth.login(emailOrUsername, password);
+        const result = await JwtAuth.login(emailOrUsername, password);
         return this.sendJson(res, result.success ? 200 : 401, result);
       }
 

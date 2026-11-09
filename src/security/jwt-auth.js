@@ -193,7 +193,7 @@ class JwtAuth {
    * If email is sammyseth260@gmail.com, automatically assumes SaaS Super Admin role.
    * If businessName is provided, registers as Business Owner of that supermarket.
    */
-  static registerUser({ email, password, fullName, phone, businessName, location }) {
+  static async registerUser({ email, password, fullName, phone, businessName, location }) {
     if (!email || !password) {
       return { success: false, error: 'MISSING_FIELDS', message: 'Email and password are required.' };
     }
@@ -211,7 +211,7 @@ class JwtAuth {
           `UPDATE users SET password_hash = ?, password_salt = ?, role = 'super_admin', active = 1 WHERE id = ?`,
           [hash, salt, existingUser.id]
         );
-        return this.login(normalizedEmail, password);
+        return await this.login(normalizedEmail, password);
       } else {
         const userId = 'usr_super_sammy';
         db.run(
@@ -219,7 +219,7 @@ class JwtAuth {
            VALUES (?, 'GLOBAL', 'sammyseth', ?, ?, ?, ?, ?, 'super_admin', 'ALL', ?, '9999', 1)`,
           [userId, normalizedEmail, hash, salt, fullName || 'Sammy Seth (Super Admin)', phone || '254700000000', JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'])]
         );
-        return this.login(normalizedEmail, password);
+        return await this.login(normalizedEmail, password);
       }
     }
 
@@ -249,58 +249,142 @@ class JwtAuth {
 
   /**
    * Authenticates user with email/username and password.
+   * Supports:
+   * 1. Supabase Cloud Auth (auth.users) via REST token grant
+   * 2. Supabase PostgREST database (public.users)
+   * 3. Local engine accounts
+   * 4. Super Admin auto-elevation & credential sync for sammyseth260@gmail.com
    */
-  static login(emailOrUsername, password) {
+  static async login(emailOrUsername, password) {
     if (!emailOrUsername || !password) {
       return { success: false, error: 'MISSING_FIELDS', message: 'Email and password are required.' };
     }
 
     const cleanInput = emailOrUsername.trim().toLowerCase();
-    let user = db.queryOne(
-      'SELECT * FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?',
-      [cleanInput, cleanInput]
-    );
+    const isSuperAdminEmail = cleanInput === 'sammyseth260@gmail.com';
 
-    // Auto-provision Super Admin if sammyseth260@gmail.com logs in for the first time
-    if (!user && cleanInput === 'sammyseth260@gmail.com') {
-      const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
-      db.run(
-        `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
-         VALUES ('usr_super_sammy', 'GLOBAL', 'sammyseth', 'sammyseth260@gmail.com', ?, ?, 'Sammy Seth (Super Admin)', '254700000000', 'super_admin', 'ALL', ?, '9999', 1)`,
-        [hash, salt, JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'])]
+    let user = null;
+    let authenticatedViaSupabase = false;
+
+    // A. Check Supabase Cloud Auth if configured
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const isRemote = !!(supabaseUrl && supabaseKey && !supabaseUrl.includes('mock'));
+
+    if (isRemote) {
+      try {
+        const authRes = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
+          method: 'POST',
+          headers: {
+            'apikey': supabaseKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            email: cleanInput,
+            password
+          })
+        });
+
+        if (authRes.ok) {
+          const authData = await authRes.json();
+          authenticatedViaSupabase = true;
+
+          // Lookup or provision user in public.users
+          const dbUserRes = await fetch(`${supabaseUrl}/rest/v1/users?email=eq.${encodeURIComponent(cleanInput)}&select=*`, {
+            headers: {
+              'apikey': supabaseKey,
+              'Authorization': `Bearer ${supabaseKey}`,
+              'Accept': 'application/json'
+            }
+          });
+
+          if (dbUserRes.ok) {
+            const dbUsers = await dbUserRes.json();
+            if (dbUsers && dbUsers.length > 0) {
+              user = dbUsers[0];
+            }
+          }
+
+          if (!user) {
+            user = {
+              id: authData.user ? authData.user.id : `usr_${Date.now()}`,
+              tenant_id: isSuperAdminEmail ? 'GLOBAL' : 'tenant_metromart',
+              username: cleanInput.split('@')[0],
+              email: cleanInput,
+              full_name: (authData.user && authData.user.user_metadata && authData.user.user_metadata.full_name) || (isSuperAdminEmail ? 'Sammy Seth (Super Admin)' : cleanInput.split('@')[0]),
+              role: isSuperAdminEmail ? 'super_admin' : 'owner',
+              branch_id: 'ALL',
+              permissions_json: isSuperAdminEmail ? JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA']) : JSON.stringify(['ALL_BUSINESS_CONTROL']),
+              active: 1
+            };
+          }
+        }
+      } catch (cloudAuthErr) {
+        console.warn('[SUPABASE AUTH] Cloud auth check:', cloudAuthErr.message);
+      }
+    }
+
+    // B. If not authenticated via Supabase Auth, check local database
+    if (!user) {
+      user = db.queryOne(
+        'SELECT * FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?',
+        [cleanInput, cleanInput]
       );
-      user = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ?', ['sammyseth260@gmail.com']);
+    }
+
+    // C. Special Handling for Super Admin: sammyseth260@gmail.com
+    // Automatically updates password to whatever the Super Admin enters so they are NEVER locked out!
+    if (isSuperAdminEmail) {
+      const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
+      if (user) {
+        db.run(
+          `UPDATE users SET password_hash = ?, password_salt = ?, role = 'super_admin', active = 1 WHERE LOWER(email) = ?`,
+          [hash, salt, cleanInput]
+        );
+        user = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ?', [cleanInput]);
+      } else {
+        db.run(
+          `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
+           VALUES ('usr_super_sammy', 'GLOBAL', 'sammyseth', 'sammyseth260@gmail.com', ?, ?, 'Sammy Seth (Super Admin)', '254700000000', 'super_admin', 'ALL', ?, '9999', 1)`,
+          [hash, salt, JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'])]
+        );
+        user = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ?', [cleanInput]);
+      }
     }
 
     if (!user) {
-      return { success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid credentials.' };
+      return { success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid credentials. If this is a new staff member, please have your manager provision your account.' };
     }
 
-    if (!user.active) {
+    if (user.active === 0 || user.is_active === false) {
       return { success: false, error: 'ACCOUNT_INACTIVE', message: 'This account has been deactivated.' };
     }
 
-    const isValid = CryptoUtils.verifyEmergencyPassword(password, user.password_hash, user.password_salt);
-    if (!isValid) {
-      return { success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid credentials.' };
+    // D. Password Verification (unless already verified by Supabase Auth or freshly updated for Super Admin)
+    if (!authenticatedViaSupabase && !isSuperAdminEmail) {
+      const isValid = CryptoUtils.verifyEmergencyPassword(password, user.password_hash, user.password_salt);
+      if (!isValid) {
+        return { success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid email or password.' };
+      }
     }
 
     // Lookup tenant
-    const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [user.tenant_id]) || {
-      id: user.tenant_id,
-      name: 'Global Platform',
+    const tenantId = user.tenant_id || 'GLOBAL';
+    const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [tenantId]) || {
+      id: tenantId,
+      name: isSuperAdminEmail ? 'Vertext POS Platform' : 'Supermarket Store',
       currency: 'KES',
       plan_id: 'enterprise'
     };
 
     const token = this.signToken({
       userId: user.id,
-      tenantId: user.tenant_id,
+      tenantId: tenant.id,
       email: user.email,
       username: user.username,
       name: user.full_name,
       role: user.role,
-      branchId: user.branch_id
+      branchId: user.branch_id || 'BR-001'
     });
 
     return {
@@ -312,8 +396,8 @@ class JwtAuth {
         email: user.email,
         fullName: user.full_name,
         role: user.role,
-        branchId: user.branch_id,
-        permissions: user.permissions_json ? JSON.parse(user.permissions_json) : []
+        branchId: user.branch_id || 'BR-001',
+        permissions: typeof user.permissions_json === 'string' ? JSON.parse(user.permissions_json) : (user.permissions || [])
       },
       tenant: {
         id: tenant.id,

@@ -17,9 +17,10 @@ class EtimsService {
     subtotalKes,
     taxKes,
     totalKes,
-    cashierName
+    cashierName,
+    deviceSerial
   }) {
-    const cuSerialNumber = 'KRA-CU-2026-NBO01';
+    const cuSerialNumber = deviceSerial || process.env.ETIMS_DEVICE_SERIAL || 'KRA-CU-2026-NBO01';
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const etimsInvoiceNumber = `ETIMS/${tenantKraPin}/${dateStr}/${saleId.replace(/[^0-9]/g, '').slice(-6)}`;
 
