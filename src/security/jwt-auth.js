@@ -5,6 +5,25 @@ const config = require('../config');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'pos-saas-kenya-enterprise-secret-key-2026';
 
+// Supabase JWKS Public Key for native ES256 token verification
+const SUPABASE_JWK = {
+  x: 'XEtY7MLPVE5hf1hOxiYfB-zIJVqKUbCMvOQeaD2oFaw',
+  y: 'fEbb0sv1G4FXS67PFD-vURXJxaxk5BCP96GSAlFO8f0',
+  alg: 'ES256',
+  crv: 'P-256',
+  ext: true,
+  kid: 'dd39cc66-0138-4ce2-91e6-c4e7db94c702',
+  kty: 'EC',
+  key_ops: ['verify']
+};
+
+let supabasePublicKey = null;
+try {
+  supabasePublicKey = crypto.createPublicKey({ key: SUPABASE_JWK, format: 'jwk' });
+} catch (e) {
+  console.warn('[JWT] Could not load Supabase JWK:', e.message);
+}
+
 class JwtAuth {
   /**
    * Generates a signed HMAC-SHA256 JWT token.
@@ -32,18 +51,44 @@ class JwtAuth {
       const parts = token.split('.');
       if (parts.length !== 3) return null;
 
-      const [header, body, signature] = parts;
-      const expectedSig = crypto
-        .createHmac('sha256', JWT_SECRET)
-        .update(`${header}.${body}`)
-        .digest('base64url');
+      const [headerB64, bodyB64, signatureB64] = parts;
+      const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8'));
+      const decoded = JSON.parse(Buffer.from(bodyB64, 'base64url').toString('utf8'));
 
-      if (signature !== expectedSig) return null;
-
-      const decoded = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
       if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) {
         return null; // Expired
       }
+
+      // 1. Supabase Native ES256 Elliptic Curve Verification
+      if (header.alg === 'ES256' && supabasePublicKey) {
+        const verifier = crypto.createVerify('SHA256');
+        verifier.update(`${headerB64}.${bodyB64}`);
+        const isValid = verifier.verify(
+          { key: supabasePublicKey, dsaEncoding: 'ieee-p1363' },
+          Buffer.from(signatureB64, 'base64url')
+        );
+
+        if (isValid) {
+          return {
+            userId: decoded.sub,
+            tenantId: decoded.user_metadata?.tenant_id || decoded.app_metadata?.tenant_id || 'GLOBAL',
+            role: decoded.user_metadata?.role || decoded.app_metadata?.role || (decoded.email === 'sammyseth260@gmail.com' ? 'super_admin' : 'cashier'),
+            email: decoded.email,
+            name: decoded.user_metadata?.full_name || decoded.email,
+            branchId: decoded.user_metadata?.branch_id || 'BR-001',
+            ...decoded
+          };
+        }
+      }
+
+      // 2. Application HMAC-SHA256 (HS256) Verification
+      const expectedSig = crypto
+        .createHmac('sha256', JWT_SECRET)
+        .update(`${headerB64}.${bodyB64}`)
+        .digest('base64url');
+
+      if (signatureB64 !== expectedSig) return null;
+
       return decoded;
     } catch (e) {
       return null;
