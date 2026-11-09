@@ -521,7 +521,9 @@ class SaasRouter {
           customerPhone: sale.customer_phone,
           etimsInfo: etims,
           host: req.headers.host || 'localhost:3000',
-          logoBase64: tenant.logo_base64 || null
+          logoBase64: tenant.logo_base64 || null,
+          receiptHeaderMsg: tenant.receipt_header_msg || null,
+          receiptFooterMsg: tenant.receipt_footer_msg || null
         });
 
         return this.sendJson(res, 200, receipt);
@@ -594,7 +596,9 @@ class SaasRouter {
           customerPhone: sale.customer_phone,
           etimsInfo: etims,
           host: req.headers.host || 'localhost:3000',
-          logoBase64: tenant.logo_base64 || null
+          logoBase64: tenant.logo_base64 || null,
+          receiptHeaderMsg: tenant.receipt_header_msg || null,
+          receiptFooterMsg: tenant.receipt_footer_msg || null
         });
 
         res.statusCode = 200;

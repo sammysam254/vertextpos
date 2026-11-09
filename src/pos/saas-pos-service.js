@@ -227,7 +227,10 @@ class SaasPosService {
       paidAmountKes: paidAmount,
       changeDueKes: changeDue,
       paymentMethod: 'CASH',
-      etimsInfo
+      etimsInfo,
+      logoBase64: tenant ? tenant.logo_base64 : null,
+      receiptHeaderMsg: tenant ? tenant.receipt_header_msg : null,
+      receiptFooterMsg: tenant ? tenant.receipt_footer_msg : null
     });
 
     // Auto-trigger print via SSE

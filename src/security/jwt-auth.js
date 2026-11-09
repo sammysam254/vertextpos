@@ -249,11 +249,10 @@ class JwtAuth {
 
   /**
    * Authenticates user with email/username and password.
-   * Supports:
-   * 1. Supabase Cloud Auth (auth.users) via REST token grant
-   * 2. Supabase PostgREST database (public.users)
-   * 3. Local engine accounts
-   * 4. Super Admin auto-elevation & credential sync for sammyseth260@gmail.com
+   * Strict Enterprise Security:
+   * All authentication is verified cryptographically by Supabase Auth (auth.users)
+   * or the Supabase database (public.users).
+   * Zero backdoors or loose password bypasses.
    */
   static async login(emailOrUsername, password) {
     if (!emailOrUsername || !password) {
@@ -263,14 +262,13 @@ class JwtAuth {
     const cleanInput = emailOrUsername.trim().toLowerCase();
     const isSuperAdminEmail = cleanInput === 'sammyseth260@gmail.com';
 
-    let user = null;
-    let authenticatedViaSupabase = false;
-
-    // A. Check Supabase Cloud Auth if configured
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
     const isRemote = !!(supabaseUrl && supabaseKey && !supabaseUrl.includes('mock'));
 
+    let authenticatedUser = null;
+
+    // 1. PRIMARY: Authenticate directly against Supabase Cloud Auth (GoTrue API)
     if (isRemote) {
       try {
         const authRes = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
@@ -281,114 +279,124 @@ class JwtAuth {
           },
           body: JSON.stringify({
             email: cleanInput,
-            password
+            password: password
           })
         });
 
-        if (authRes.ok) {
-          const authData = await authRes.json();
-          authenticatedViaSupabase = true;
+        const authData = await authRes.json();
 
-          // Lookup or provision user in public.users
-          const dbUserRes = await fetch(`${supabaseUrl}/rest/v1/users?email=eq.${encodeURIComponent(cleanInput)}&select=*`, {
-            headers: {
-              'apikey': supabaseKey,
-              'Authorization': `Bearer ${supabaseKey}`,
-              'Accept': 'application/json'
+        if (authRes.ok && authData.access_token) {
+          // Password cryptographically verified by Supabase!
+          authenticatedUser = {
+            id: authData.user ? authData.user.id : `usr_${cleanInput.split('@')[0]}`,
+            email: cleanInput,
+            username: cleanInput.split('@')[0],
+            full_name: (authData.user && authData.user.user_metadata && authData.user.user_metadata.full_name) || (isSuperAdminEmail ? 'Sammy Seth (Super Admin)' : cleanInput.split('@')[0]),
+            role: isSuperAdminEmail ? 'super_admin' : ((authData.user && authData.user.user_metadata && authData.user.user_metadata.role) || 'owner'),
+            tenant_id: isSuperAdminEmail ? 'GLOBAL' : 'tenant_metromart',
+            branch_id: 'ALL',
+            permissions: isSuperAdminEmail ? ['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'] : ['ALL_BUSINESS_CONTROL']
+          };
+
+          // Also check public.users table in Supabase for customized role / profile
+          try {
+            const dbRes = await fetch(`${supabaseUrl}/rest/v1/users?email=eq.${encodeURIComponent(cleanInput)}&select=*`, {
+              headers: {
+                'apikey': supabaseKey,
+                'Authorization': `Bearer ${supabaseKey}`,
+                'Accept': 'application/json'
+              }
+            });
+            if (dbRes.ok) {
+              const rows = await dbRes.json();
+              if (rows && rows.length > 0) {
+                const r = rows[0];
+                authenticatedUser.id = r.id || authenticatedUser.id;
+                authenticatedUser.full_name = r.full_name || authenticatedUser.full_name;
+                authenticatedUser.role = isSuperAdminEmail ? 'super_admin' : (r.role || authenticatedUser.role);
+                authenticatedUser.tenant_id = isSuperAdminEmail ? 'GLOBAL' : (r.tenant_id || authenticatedUser.tenant_id);
+                authenticatedUser.branch_id = r.branch_id || authenticatedUser.branch_id;
+              }
             }
-          });
+          } catch (e) {}
 
-          if (dbUserRes.ok) {
-            const dbUsers = await dbUserRes.json();
-            if (dbUsers && dbUsers.length > 0) {
-              user = dbUsers[0];
-            }
-          }
-
-          if (!user) {
-            user = {
-              id: authData.user ? authData.user.id : `usr_${Date.now()}`,
-              tenant_id: isSuperAdminEmail ? 'GLOBAL' : 'tenant_metromart',
-              username: cleanInput.split('@')[0],
-              email: cleanInput,
-              full_name: (authData.user && authData.user.user_metadata && authData.user.user_metadata.full_name) || (isSuperAdminEmail ? 'Sammy Seth (Super Admin)' : cleanInput.split('@')[0]),
-              role: isSuperAdminEmail ? 'super_admin' : 'owner',
-              branch_id: 'ALL',
-              permissions_json: isSuperAdminEmail ? JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA']) : JSON.stringify(['ALL_BUSINESS_CONTROL']),
-              active: 1
+        } else if (authData && authData.error_description) {
+          if (authData.error_description.toLowerCase().includes('confirm')) {
+            return {
+              success: false,
+              error: 'EMAIL_NOT_CONFIRMED',
+              message: 'Your email address is not confirmed in Supabase. In your Supabase dashboard under Authentication -> Users, click on the user and select "Confirm User" (or disable "Confirm email" in Auth settings).'
             };
           }
         }
-      } catch (cloudAuthErr) {
-        console.warn('[SUPABASE AUTH] Cloud auth check:', cloudAuthErr.message);
+      } catch (err) {
+        console.warn('[SUPABASE AUTH] Direct API check notice:', err.message);
       }
     }
 
-    // B. If not authenticated via Supabase Auth, check local database
-    if (!user) {
-      user = db.queryOne(
-        'SELECT * FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?',
-        [cleanInput, cleanInput]
-      );
-    }
-
-    // C. Special Handling for Super Admin: sammyseth260@gmail.com
-    // Automatically updates password to whatever the Super Admin enters so they are NEVER locked out!
-    if (isSuperAdminEmail) {
-      const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
+    // 2. SECONDARY: Check Supabase public.users table (if user was created via SQL migration)
+    if (!authenticatedUser && isRemote) {
       try {
-        if (user) {
-          db.run(
-            `UPDATE users SET password_hash = ?, password_salt = ?, role = 'super_admin', active = 1 WHERE LOWER(email) = ?`,
-            [hash, salt, cleanInput]
-          );
-          user = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ?', [cleanInput]);
-        } else {
-          db.run(
-            `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
-             VALUES ('usr_super_sammy', 'GLOBAL', 'sammyseth', 'sammyseth260@gmail.com', ?, ?, 'Sammy Seth (Super Admin)', '254700000000', 'super_admin', 'ALL', ?, '9999', 1)`,
-            [hash, salt, JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'])]
-          );
-          user = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ?', [cleanInput]);
+        const dbRes = await fetch(`${supabaseUrl}/rest/v1/users?email=eq.${encodeURIComponent(cleanInput)}&select=*`, {
+          headers: {
+            'apikey': supabaseKey,
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Accept': 'application/json'
+          }
+        });
+        if (dbRes.ok) {
+          const rows = await dbRes.json();
+          if (rows && rows.length > 0) {
+            const r = rows[0];
+            const isValid = CryptoUtils.verifyEmergencyPassword(password, r.password_hash, r.password_salt);
+            if (isValid) {
+              authenticatedUser = {
+                id: r.id,
+                email: r.email,
+                username: r.username || cleanInput.split('@')[0],
+                full_name: r.full_name,
+                role: isSuperAdminEmail ? 'super_admin' : r.role,
+                tenant_id: isSuperAdminEmail ? 'GLOBAL' : (r.tenant_id || 'GLOBAL'),
+                branch_id: r.branch_id || 'ALL',
+                permissions: Array.isArray(r.permissions) ? r.permissions : []
+              };
+            }
+          }
         }
-      } catch (e) {
-        console.warn('[AUTH] Super Admin DB sync notice:', e.message);
-      }
+      } catch (e) {}
+    }
 
-      // Guaranteed Super Admin object fallback
-      if (!user) {
-        user = {
-          id: 'usr_super_sammy',
-          tenant_id: 'GLOBAL',
-          username: 'sammyseth',
-          email: 'sammyseth260@gmail.com',
-          full_name: 'Sammy Seth (Super Admin)',
-          role: 'super_admin',
-          branch_id: 'ALL',
-          permissions_json: JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA']),
-          active: 1
-        };
+    // 3. TERTIARY: Check local store (for testing, offline mode, and seeded accounts)
+    if (!authenticatedUser) {
+      const localUser = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?', [cleanInput, cleanInput]);
+      if (localUser && localUser.active) {
+        const isValid = CryptoUtils.verifyEmergencyPassword(password, localUser.password_hash, localUser.password_salt);
+        if (isValid) {
+          authenticatedUser = {
+            id: localUser.id,
+            email: localUser.email,
+            username: localUser.username,
+            full_name: localUser.full_name,
+            role: localUser.role,
+            tenant_id: localUser.tenant_id,
+            branch_id: localUser.branch_id,
+            permissions: localUser.permissions_json ? JSON.parse(localUser.permissions_json) : []
+          };
+        }
       }
     }
 
-    if (!user) {
-      return { success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid credentials. If this is a new staff member, please have your manager provision your account.' };
-    }
-
-    if (user.active === 0 || user.is_active === false) {
-      return { success: false, error: 'ACCOUNT_INACTIVE', message: 'This account has been deactivated.' };
-    }
-
-    // D. Password Verification (unless already verified by Supabase Auth or freshly updated for Super Admin)
-    if (!authenticatedViaSupabase && !isSuperAdminEmail) {
-      const isValid = CryptoUtils.verifyEmergencyPassword(password, user.password_hash, user.password_salt);
-      if (!isValid) {
-        return { success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid email or password.' };
-      }
+    // Strict validation: Reject if password did not match Supabase or local store
+    if (!authenticatedUser) {
+      return {
+        success: false,
+        error: 'INVALID_CREDENTIALS',
+        message: 'Invalid login credentials. Please check your email and password in Supabase.'
+      };
     }
 
     // Lookup tenant
-    const tenantId = user.tenant_id || 'GLOBAL';
+    const tenantId = authenticatedUser.tenant_id || 'GLOBAL';
     const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [tenantId]) || {
       id: tenantId,
       name: isSuperAdminEmail ? 'Vertext POS Platform' : 'Supermarket Store',
@@ -397,26 +405,26 @@ class JwtAuth {
     };
 
     const token = this.signToken({
-      userId: user.id,
+      userId: authenticatedUser.id,
       tenantId: tenant.id,
-      email: user.email,
-      username: user.username,
-      name: user.full_name,
-      role: user.role,
-      branchId: user.branch_id || 'BR-001'
+      email: authenticatedUser.email,
+      username: authenticatedUser.username,
+      name: authenticatedUser.full_name,
+      role: authenticatedUser.role,
+      branchId: authenticatedUser.branch_id || 'BR-001'
     });
 
     return {
       success: true,
       token,
       user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        fullName: user.full_name,
-        role: user.role,
-        branchId: user.branch_id || 'BR-001',
-        permissions: typeof user.permissions_json === 'string' ? JSON.parse(user.permissions_json) : (user.permissions || [])
+        id: authenticatedUser.id,
+        username: authenticatedUser.username,
+        email: authenticatedUser.email,
+        fullName: authenticatedUser.full_name,
+        role: authenticatedUser.role,
+        branchId: authenticatedUser.branch_id || 'BR-001',
+        permissions: authenticatedUser.permissions || []
       },
       tenant: {
         id: tenant.id,

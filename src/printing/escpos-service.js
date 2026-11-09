@@ -33,7 +33,9 @@ class EscPosService {
     etimsInfo = null,
     paperWidth = '80MM',
     host = 'localhost:3000',
-    logoBase64 = null
+    logoBase64 = null,
+    receiptHeaderMsg = null,
+    receiptFooterMsg = null
   }) {
     const timestamp = new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' });
     const is80mm = paperWidth === '80MM';
@@ -69,6 +71,7 @@ class EscPosService {
           <div class="store-legal-entity">${tenantName}</div>
           <div class="store-meta-line">${branchName} &bull; ${branchLocation}</div>
           <div class="store-meta-line">TEL: ${branchPhone} | KRA PIN: <strong>${kraPin}</strong></div>
+          ${receiptHeaderMsg ? `<div class="store-promo-header" style="font-size: 10px; font-weight: bold; margin-top: 3px; letter-spacing: 0.5px;">${receiptHeaderMsg}</div>` : ''}
         </div>
 
         <div class="receipt-divider">================================</div>
@@ -144,6 +147,7 @@ class EscPosService {
         </div>
 
         <div class="receipt-footer-text">
+          ${receiptFooterMsg ? `<p class="store-promo-footer" style="font-weight: bold; margin-bottom: 4px;">${receiptFooterMsg}</p>` : ''}
           <p>Thank you for shopping with us!</p>
           <p>Goods once sold can only be exchanged within 7 days with original receipt.</p>
           <div class="powered-by-brand">*** POWERED BY VERTEXT DIGITAL ***</div>

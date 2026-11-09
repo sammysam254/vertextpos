@@ -813,13 +813,9 @@ async function autoFetchAndPrintReceipt(saleId) {
       headers: { 'X-Tenant-Id': STATE.currentTenantId, 'Authorization': `Bearer ${STATE.token}` }
     });
     const data = await res.json();
-    if (data && data.receiptHtml) {
+    if (data && data.receiptHtml && data.receiptHtml !== 'undefined') {
       openReceiptModalWithHtml(data.receiptHtml);
-
-      // Call browser print
-      setTimeout(() => {
-        window.print();
-      }, 400);
+      window.printThermalTicket(data.receiptHtml);
     }
 
     // Auto-clear cart and ready for next customer
@@ -842,19 +838,36 @@ window.simulateCustomerPin = async function(willSucceed) {
     return;
   }
 
-  const res = await fetch('/api/mpesa/simulate-pin', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ checkoutRequestId: STATE.activeMpesaCheckoutId, willSucceed })
-  });
+  showLoading('Processing M-Pesa PIN confirmation...');
+  try {
+    const res = await fetch('/api/mpesa/simulate-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checkoutRequestId: STATE.activeMpesaCheckoutId, willSucceed })
+    });
 
-  const data = await res.json();
-  if (data.success && willSucceed) {
-    window.closeMpesaModal();
-    showToast(`Payment Confirmed! Receipt: ${data.mpesaReceipt}`, 'success');
-    await autoFetchAndPrintReceipt(data.saleId);
-  } else {
-    showToast(`Payment cancelled: ${data.resultDesc}`, 'error');
+    const data = await res.json();
+    hideLoading();
+
+    if (data.success && willSucceed) {
+      window.closeMpesaModal();
+      const receiptCode = data.mpesaReceipt || (data.receipt ? data.receipt.receiptNumber : 'CONFIRMED');
+      showToast(`Payment Confirmed! Receipt: ${receiptCode}`, 'success');
+
+      const receiptHtml = (data.receipt && data.receipt.receiptHtml && data.receipt.receiptHtml !== 'undefined') ? data.receipt.receiptHtml : null;
+      if (receiptHtml) {
+        openReceiptModalWithHtml(receiptHtml);
+        window.printThermalTicket(receiptHtml);
+        await startNewSale();
+      } else {
+        await autoFetchAndPrintReceipt(data.saleId);
+      }
+    } else {
+      showToast(`Payment cancelled: ${data.resultDesc || data.message || 'Cancelled'}`, 'error');
+    }
+  } catch (err) {
+    hideLoading();
+    showToast('Simulation error: ' + err.message, 'error');
   }
 };
 
@@ -915,7 +928,14 @@ window.submitCashPayment = async function() {
   if (data.success) {
     window.closeCashModal();
     showToast(`Cash sale completed! Change: KES ${data.changeDueKes.toFixed(2)}`, 'success');
-    await autoFetchAndPrintReceipt(data.sale.id);
+    const receiptHtml = (data.receipt && data.receipt.receiptHtml && data.receipt.receiptHtml !== 'undefined') ? data.receipt.receiptHtml : null;
+    if (receiptHtml) {
+      openReceiptModalWithHtml(receiptHtml);
+      window.printThermalTicket(receiptHtml);
+      await startNewSale();
+    } else {
+      await autoFetchAndPrintReceipt(data.sale.id);
+    }
   } else {
     showToast(`Error: ${data.message}`, 'error');
   }
@@ -966,28 +986,295 @@ function initRealTimeEvents() {
                           target.registerId === STATE.currentRegisterId ||
                           (target.cashierId && STATE.currentUser && target.cashierId === STATE.currentUser.id);
 
-    if (isTargetedToMe) {
+    if (isTargetedToMe && p && p.receiptHtml && p.receiptHtml !== 'undefined') {
       openReceiptModalWithHtml(p.receiptHtml);
-      setTimeout(() => window.print(), 300);
+      window.printThermalTicket(p.receiptHtml);
     }
   });
 }
 
-function openReceiptModalWithHtml(html) {
-  if (!html) {
-    console.warn('Attempted to render empty receipt HTML');
+// Dedicated isolated thermal printer for 80mm ESC/POS slips
+window.printThermalTicket = function(html) {
+  if (!html || typeof html !== 'string' || html.trim() === '' || html === 'undefined') {
+    console.warn('printThermalTicket: Empty or invalid receipt HTML provided');
     return;
   }
-  document.getElementById('receiptContainer').innerHTML = html;
-  document.getElementById('receiptModal').style.display = 'flex';
+
+  let iframe = document.getElementById('receiptPrintFrame');
+  if (!iframe) {
+    iframe = document.createElement('iframe');
+    iframe.id = 'receiptPrintFrame';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
+    document.body.appendChild(iframe);
+  }
+
+  const doc = iframe.contentWindow.document;
+  doc.open();
+  doc.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>Vertext POS Receipt</title>
+      <style>
+        @page {
+          size: 80mm auto;
+          margin: 0mm 0mm 4mm 0mm;
+        }
+        * {
+          box-sizing: border-box;
+          margin: 0;
+          padding: 0;
+        }
+        body {
+          font-family: 'Courier New', Courier, monospace, system-ui;
+          background: #ffffff;
+          color: #000000;
+          width: 80mm;
+          margin: 0 auto;
+          padding: 2mm 3mm;
+          font-size: 11px;
+          line-height: 1.35;
+        }
+        .thermal-receipt {
+          position: relative;
+          width: 100%;
+          max-width: 76mm;
+          margin: 0 auto;
+          background: #ffffff;
+          overflow: hidden;
+        }
+        .receipt-watermark {
+          position: absolute;
+          top: 45%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          width: 55mm;
+          height: 55mm;
+          background-repeat: no-repeat;
+          background-position: center;
+          background-size: contain;
+          opacity: 0.08 !important;
+          pointer-events: none;
+          z-index: 0;
+          filter: grayscale(100%);
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        .receipt-header, .receipt-meta-grid, .receipt-table, .receipt-totals-block, .receipt-etims-footer, .receipt-qr-container, .receipt-footer-text, .receipt-divider {
+          position: relative;
+          z-index: 1;
+        }
+        .receipt-header {
+          text-align: center;
+          margin-bottom: 6px;
+        }
+        .receipt-top-logo {
+          max-width: 48mm;
+          max-height: 24mm;
+          object-fit: contain;
+          margin: 0 auto 4px auto;
+          display: block;
+          filter: grayscale(100%) contrast(120%);
+        }
+        .store-brand-title {
+          font-size: 14px;
+          font-weight: 900;
+          letter-spacing: 0.5px;
+          margin-bottom: 2px;
+          text-transform: uppercase;
+        }
+        .store-legal-entity {
+          font-size: 10px;
+          font-weight: 600;
+          color: #222;
+        }
+        .store-meta-line {
+          font-size: 9.5px;
+          margin-top: 1px;
+        }
+        .store-promo-header {
+          font-size: 10px;
+          font-weight: bold;
+          margin-top: 3px;
+        }
+        .receipt-divider {
+          text-align: center;
+          font-family: monospace;
+          font-size: 11px;
+          letter-spacing: -1px;
+          margin: 4px 0;
+          overflow: hidden;
+        }
+        .receipt-meta-grid {
+          font-size: 10px;
+          line-height: 1.4;
+          margin: 4px 0;
+        }
+        .receipt-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 10px;
+          margin: 4px 0;
+        }
+        .receipt-table th {
+          border-bottom: 1px dashed #000;
+          padding: 2px 0;
+          font-size: 9.5px;
+        }
+        .receipt-item-row td {
+          padding-top: 3px;
+          font-weight: bold;
+          font-size: 10px;
+        }
+        .receipt-item-calc td {
+          padding-bottom: 3px;
+          font-size: 9.5px;
+        }
+        .receipt-totals-block {
+          font-size: 10.5px;
+          line-height: 1.45;
+          margin: 4px 0;
+        }
+        .total-line {
+          display: flex;
+          justify-content: space-between;
+        }
+        .grand-total {
+          font-size: 13px;
+          font-weight: 900;
+          border-top: 1px dashed #000;
+          border-bottom: 1px dashed #000;
+          padding: 3px 0;
+          margin: 3px 0;
+        }
+        .receipt-etims-footer {
+          border: 1px dashed #000;
+          padding: 4px;
+          margin: 6px 0;
+          font-size: 9px;
+          text-align: center;
+          line-height: 1.35;
+        }
+        .etims-label {
+          font-weight: 900;
+          font-size: 9.5px;
+        }
+        .etims-sig {
+          font-weight: 900;
+          letter-spacing: 1px;
+          word-break: break-all;
+        }
+        .receipt-qr-container {
+          text-align: center;
+          margin: 6px 0;
+        }
+        .qr-svg-frame svg {
+          width: 85px !important;
+          height: 85px !important;
+          margin: 0 auto;
+          display: block;
+        }
+        .qr-label {
+          font-size: 9px;
+          font-weight: 700;
+          margin-top: 2px;
+        }
+        .qr-url-text {
+          font-size: 7.5px;
+          color: #444;
+          word-break: break-all;
+        }
+        .receipt-footer-text {
+          text-align: center;
+          font-size: 9px;
+          margin-top: 4px;
+          line-height: 1.3;
+        }
+        .store-promo-footer {
+          font-weight: bold;
+          margin-bottom: 3px;
+        }
+        .powered-by-brand {
+          font-size: 9.5px;
+          font-weight: 900;
+          margin-top: 4px;
+          letter-spacing: 0.5px;
+        }
+      </style>
+    </head>
+    <body>
+      ${html}
+    </body>
+    </html>
+  `);
+  doc.close();
+
+  setTimeout(() => {
+    try {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+    } catch (e) {
+      console.warn('Iframe print error, falling back to window.print:', e);
+      window.print();
+    }
+  }, 250);
+};
+
+function openReceiptModalWithHtml(html) {
+  if (!html || typeof html !== 'string' || html.trim() === '' || html === 'undefined') {
+    console.warn('Attempted to render invalid receipt HTML:', html);
+    return;
+  }
+  const container = document.getElementById('receiptContainer');
+  if (container) {
+    container.innerHTML = html;
+  }
+  const modal = document.getElementById('receiptModal');
+  if (modal) {
+    modal.style.display = 'flex';
+  }
 }
 
 window.closeReceiptModal = function() {
-  document.getElementById('receiptModal').style.display = 'none';
+  const modal = document.getElementById('receiptModal');
+  if (modal) modal.style.display = 'none';
 };
 
 window.printBrowserReceipt = function() {
-  window.print();
+  const container = document.getElementById('receiptContainer');
+  if (container && container.innerHTML && container.innerHTML !== 'undefined' && container.innerHTML.trim() !== '') {
+    window.printThermalTicket(container.innerHTML);
+  } else {
+    showToast('No receipt available to print.', 'warning');
+  }
+};
+
+window.previewReceipt = async function(saleId) {
+  if (!saleId) return;
+  showLoading('Loading receipt preview...');
+  try {
+    const res = await fetch(`/api/printing/receipt/${saleId}`, {
+      headers: { 'X-Tenant-Id': STATE.currentTenantId, 'Authorization': `Bearer ${STATE.token}` }
+    });
+    const data = await res.json();
+    hideLoading();
+    if (data && data.receiptHtml && data.receiptHtml !== 'undefined') {
+      openReceiptModalWithHtml(data.receiptHtml);
+    } else {
+      showToast('Could not load receipt: ' + (data.message || 'Not found'), 'error');
+    }
+  } catch (err) {
+    hideLoading();
+    showToast('Error loading receipt: ' + err.message, 'error');
+  }
 };
 
 // =========================================================================
