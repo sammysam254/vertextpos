@@ -1,6 +1,7 @@
 const db = require('../db/sqlite-store');
 const supabase = require('../db/supabase-client');
 const CryptoUtils = require('./crypto-utils');
+const config = require('../config');
 
 /**
  * Strict Hierarchical Role Creation & Management Engine.
@@ -13,9 +14,177 @@ const CryptoUtils = require('./crypto-utils');
  */
 class HierarchyService {
   /**
+   * Resolves or ensures a tenant UUID in Supabase database.
+   */
+  static async getSupabaseTenantUuid(tenantSlugOrId, tenantData = {}) {
+    const supabaseUrl = process.env.SUPABASE_URL || (config && config.supabase && config.supabase.url) || null;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || null;
+    const anonKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || (config && config.supabase && config.supabase.anonKey) || null;
+    const apiKey = serviceKey || anonKey;
+
+    if (!supabaseUrl || !apiKey) return null;
+
+    try {
+      const slug = (tenantData.slug || tenantSlugOrId || '').replace(/^tenant_/, '').toLowerCase();
+      // 1. Query by slug
+      const res = await fetch(`${supabaseUrl}/rest/v1/tenants?slug=eq.${encodeURIComponent(slug)}&select=id`, {
+        headers: {
+          'apikey': apiKey,
+          'Authorization': `Bearer ${apiKey}`
+        }
+      });
+      const rows = await res.json();
+      if (rows && rows.length > 0) {
+        return rows[0].id;
+      }
+
+      // 2. If not found, insert
+      const insertRes = await fetch(`${supabaseUrl}/rest/v1/tenants`, {
+        method: 'POST',
+        headers: {
+          'apikey': apiKey,
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
+        },
+        body: JSON.stringify({
+          slug: slug || 'general',
+          legal_name: tenantData.legalName || tenantData.name || 'Supermarket Store',
+          trade_name: tenantData.tradeName || tenantData.name || 'Supermarket Store',
+          kra_pin: tenantData.kraPin || 'P051234567Z',
+          business_phone: tenantData.businessPhone || tenantData.phone || '254700000000',
+          business_email: tenantData.businessEmail || tenantData.email || `${slug || 'store'}@pos.ke`,
+          location: tenantData.location || 'Nairobi'
+        })
+      });
+      const created = await insertRes.json();
+      if (created && created.length > 0) {
+        return created[0].id;
+      }
+    } catch (err) {
+      console.warn('[SUPABASE HIERARCHY] Tenant UUID resolution error:', err.message);
+    }
+    return null;
+  }
+
+  /**
+   * Syncs any user directly to Supabase Auth (GoTrue) & Supabase Database (public.users)
+   */
+  static async syncUserToSupabase({
+    userId,
+    tenantId,
+    branchId = null,
+    email,
+    username,
+    password,
+    fullName,
+    phone,
+    role,
+    pinCode = '0000',
+    permissions = []
+  }) {
+    const supabaseUrl = process.env.SUPABASE_URL || (config && config.supabase && config.supabase.url) || null;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || null;
+    const anonKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || (config && config.supabase && config.supabase.anonKey) || null;
+    const apiKey = serviceKey || anonKey;
+
+    if (!supabaseUrl || !apiKey) return userId;
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const cleanUsername = username || normalizedEmail.split('@')[0];
+    let finalUserId = userId;
+
+    // 1. Direct GoTrue Auth Registration (Auto-confirmed with service key)
+    try {
+      if (serviceKey) {
+        const adminRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+          method: 'POST',
+          headers: {
+            'apikey': serviceKey,
+            'Authorization': `Bearer ${serviceKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            email: normalizedEmail,
+            password: password,
+            email_confirm: true,
+            user_metadata: {
+              full_name: fullName,
+              role: role,
+              phone: phone || '',
+              tenant_id: tenantId,
+              branch_id: branchId
+            }
+          })
+        });
+        const adminData = await adminRes.json();
+        if (adminData && adminData.id) {
+          finalUserId = adminData.id;
+        }
+      } else {
+        const authRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+          method: 'POST',
+          headers: {
+            'apikey': apiKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            email: normalizedEmail,
+            password: password,
+            data: {
+              full_name: fullName,
+              role: role,
+              phone: phone || '',
+              tenant_id: tenantId,
+              branch_id: branchId
+            }
+          })
+        });
+        const authData = await authRes.json();
+        if (authData && authData.user && authData.user.id) {
+          finalUserId = authData.user.id;
+        }
+      }
+    } catch (authErr) {
+      console.warn(`[SUPABASE HIERARCHY] Auth signup notice: ${authErr.message}`);
+    }
+
+    // 2. Direct Supabase Database REST table insertion (public.users)
+    try {
+      const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
+      await fetch(`${supabaseUrl}/rest/v1/users`, {
+        method: 'POST',
+        headers: {
+          'apikey': apiKey,
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify({
+          tenant_id: tenantId || null,
+          username: cleanUsername,
+          email: normalizedEmail,
+          password_hash: hash,
+          password_salt: salt,
+          full_name: fullName,
+          phone: phone || '',
+          role: role,
+          branch_id: null,
+          permissions: permissions || [],
+          is_active: true
+        })
+      });
+    } catch (dbErr) {
+      console.warn(`[SUPABASE HIERARCHY] DB sync notice: ${dbErr.message}`);
+    }
+
+    return finalUserId;
+  }
+
+  /**
    * Super Admin creates a new Supermarket Business Owner.
    */
-  static createBusinessOwner({
+  static async createBusinessOwner({
     creatorRole,
     businessName,
     tradeName,
@@ -104,35 +273,30 @@ class HierarchyService {
       });
     });
 
-    // Cloud push to Supabase
-    supabase.from('tenants').insert({
-      id: tenantId,
-      name: businessName,
+    // 1. Cloud push to Supabase
+    const supabaseTenantId = await HierarchyService.getSupabaseTenantUuid(tenantId, {
       slug: cleanSlug,
-      trade_name: tradeName || businessName,
-      kra_pin: kraPin || 'P051234567Z',
-      business_phone: businessPhone || '254700000000',
-      business_email: ownerEmail,
-      currency: 'KES',
-      plan_tier: planTier,
-      monthly_subscription_kes: fee,
-      location: location || 'Nairobi',
-      subscription_status: 'ACTIVE'
-    }).catch(() => {});
+      legalName: businessName,
+      tradeName: tradeName || businessName,
+      kraPin: kraPin || 'P051234567Z',
+      businessPhone: businessPhone || '254700000000',
+      businessEmail: ownerEmail,
+      location: location || 'Nairobi'
+    });
 
-    supabase.from('users').insert({
-      id: userId,
-      tenant_id: tenantId,
-      username: ownerEmail.split('@')[0],
+    await HierarchyService.syncUserToSupabase({
+      userId,
+      tenantId: supabaseTenantId,
+      branchId: null,
       email: ownerEmail,
-      password_hash: hash,
-      password_salt: salt,
-      full_name: ownerFullName,
+      username: ownerEmail.split('@')[0],
+      password,
+      fullName: ownerFullName,
       phone: businessPhone || '',
       role: 'owner',
-      branch_id: branchId,
-      is_active: true
-    }).catch(() => {});
+      pinCode: '1111',
+      permissions: ['ALL_BUSINESS_CONTROL', 'FINANCIAL_REPORTS', 'MANAGE_BRANCHES', 'MANAGE_ADMINS']
+    });
 
     return {
       success: true,
@@ -236,7 +400,7 @@ class HierarchyService {
   /**
    * Business Owner creates a Business Admin.
    */
-  static createBusinessAdmin({
+  static async createBusinessAdmin({
     creatorRole,
     creatorTenantId,
     fullName,
@@ -264,12 +428,30 @@ class HierarchyService {
 
     const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
     const userId = `usr_adm_${Date.now().toString().slice(-4)}`;
+    const permissions = ['MANAGE_USERS', 'MANAGE_PRODUCTS', 'MANAGE_INVENTORY', 'MANAGE_BRANCH_MANAGERS'];
 
     db.run(
       `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'admin', 'ALL', ?, '2222', 1)`,
-      [userId, creatorTenantId, username || email.split('@')[0], email, hash, salt, fullName, phone || '', JSON.stringify(['MANAGE_USERS', 'MANAGE_PRODUCTS', 'MANAGE_INVENTORY', 'MANAGE_BRANCH_MANAGERS'])]
+      [userId, creatorTenantId, username || email.split('@')[0], email, hash, salt, fullName, phone || '', JSON.stringify(permissions)]
     );
+
+    // Sync to Supabase directly
+    const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [creatorTenantId]);
+    const supabaseTenantId = await HierarchyService.getSupabaseTenantUuid(creatorTenantId, tenant || {});
+    await HierarchyService.syncUserToSupabase({
+      userId,
+      tenantId: supabaseTenantId,
+      branchId: null,
+      email,
+      username: username || email.split('@')[0],
+      password,
+      fullName,
+      phone,
+      role: 'admin',
+      pinCode: '2222',
+      permissions
+    });
 
     return {
       success: true,
@@ -281,7 +463,7 @@ class HierarchyService {
   /**
    * Business Admin (or Owner) creates a Branch Manager.
    */
-  static createBranchManager({
+  static async createBranchManager({
     creatorRole,
     creatorTenantId,
     fullName,
@@ -315,12 +497,30 @@ class HierarchyService {
 
     const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
     const userId = `usr_mgr_${Date.now().toString().slice(-4)}`;
+    const permissions = ['BRANCH_OPERATIONS', 'APPROVE_RETURNS', 'MONITOR_SHIFTS', 'MANAGE_STAFF'];
 
     db.run(
       `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'branch_manager', ?, ?, '3333', 1)`,
-      [userId, creatorTenantId, username || email.split('@')[0], email, hash, salt, fullName, phone || '', branchId, JSON.stringify(['BRANCH_OPERATIONS', 'APPROVE_RETURNS', 'MONITOR_SHIFTS', 'MANAGE_STAFF'])]
+      [userId, creatorTenantId, username || email.split('@')[0], email, hash, salt, fullName, phone || '', branchId, JSON.stringify(permissions)]
     );
+
+    // Sync to Supabase directly
+    const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [creatorTenantId]);
+    const supabaseTenantId = await HierarchyService.getSupabaseTenantUuid(creatorTenantId, tenant || {});
+    await HierarchyService.syncUserToSupabase({
+      userId,
+      tenantId: supabaseTenantId,
+      branchId: null,
+      email,
+      username: username || email.split('@')[0],
+      password,
+      fullName,
+      phone,
+      role: 'branch_manager',
+      pinCode: '3333',
+      permissions
+    });
 
     return {
       success: true,
@@ -332,7 +532,7 @@ class HierarchyService {
   /**
    * Branch Manager creates operational staff for their assigned branch.
    */
-  static createStaff({
+  static async createStaff({
     creatorRole,
     creatorTenantId,
     creatorBranchId,
@@ -386,6 +586,23 @@ class HierarchyService {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [userId, creatorTenantId, username || email.split('@')[0], email, hash, salt, fullName, phone || '', role, creatorBranchId || 'BR-001', JSON.stringify(defaultPermissions), pinCode]
     );
+
+    // Sync to Supabase directly
+    const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [creatorTenantId]);
+    const supabaseTenantId = await HierarchyService.getSupabaseTenantUuid(creatorTenantId, tenant || {});
+    await HierarchyService.syncUserToSupabase({
+      userId,
+      tenantId: supabaseTenantId,
+      branchId: null,
+      email,
+      username: username || email.split('@')[0],
+      password,
+      fullName,
+      phone,
+      role,
+      pinCode,
+      permissions: defaultPermissions
+    });
 
     return {
       success: true,

@@ -506,13 +506,14 @@ class JwtAuth {
     const isSuperAdminEmail = cleanInput === 'sammyseth260@gmail.com';
 
     const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
     const isRemote = !!(supabaseUrl && supabaseKey && !supabaseUrl.includes('mock'));
 
     let authenticatedUser = null;
+    let emailNotConfirmed = false;
 
     // 1. PRIMARY: Authenticate directly against Supabase Cloud Auth (GoTrue API)
-    if (isRemote) {
+    if (isRemote && cleanInput.includes('@')) {
       try {
         const authRes = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
           method: 'POST',
@@ -543,7 +544,7 @@ class JwtAuth {
 
           // Also check public.users table in Supabase for customized role / profile
           try {
-            const dbRes = await fetch(`${supabaseUrl}/rest/v1/users?email=eq.${encodeURIComponent(cleanInput)}&select=*`, {
+            const dbRes = await fetch(`${supabaseUrl}/rest/v1/users?or=(email.eq.${encodeURIComponent(cleanInput)},username.eq.${encodeURIComponent(cleanInput)})&select=*`, {
               headers: {
                 'apikey': supabaseKey,
                 'Authorization': `Bearer ${supabaseKey}`,
@@ -564,21 +565,17 @@ class JwtAuth {
           } catch (e) {}
 
         } else if (authData && (authData.error_code === 'email_not_confirmed' || (authData.msg && authData.msg.toLowerCase().includes('confirm')) || (authData.error_description && authData.error_description.toLowerCase().includes('confirm')))) {
-          return {
-            success: false,
-            error: 'EMAIL_NOT_CONFIRMED',
-            message: 'Your email address is not confirmed in Supabase. In your Supabase dashboard under Authentication -> Users, click on your user and select "Confirm User" (or disable "Confirm email" in Auth settings).'
-          };
+          emailNotConfirmed = true;
         }
       } catch (err) {
         console.warn('[SUPABASE AUTH] Direct API check notice:', err.message);
       }
     }
 
-    // 2. SECONDARY: Check Supabase public.users table (if user was created via SQL migration)
+    // 2. SECONDARY: Check Supabase public.users table (verifies staff created by store managers)
     if (!authenticatedUser && isRemote) {
       try {
-        const dbRes = await fetch(`${supabaseUrl}/rest/v1/users?email=eq.${encodeURIComponent(cleanInput)}&select=*`, {
+        const dbRes = await fetch(`${supabaseUrl}/rest/v1/users?or=(email.eq.${encodeURIComponent(cleanInput)},username.eq.${encodeURIComponent(cleanInput)})&select=*`, {
           headers: {
             'apikey': supabaseKey,
             'Authorization': `Bearer ${supabaseKey}`,
@@ -605,6 +602,14 @@ class JwtAuth {
           }
         }
       } catch (e) {}
+    }
+
+    if (!authenticatedUser && emailNotConfirmed) {
+      return {
+        success: false,
+        error: 'EMAIL_NOT_CONFIRMED',
+        message: 'Your email address is not confirmed in Supabase. In your Supabase dashboard under Authentication -> Users, click on your user and select "Confirm User" (or disable "Confirm email" in Auth settings).'
+      };
     }
 
     // 3. TERTIARY: Check local store (for testing, offline mode, and seeded accounts)

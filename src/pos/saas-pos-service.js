@@ -61,11 +61,18 @@ class SaasPosService {
       return { success: false, error: 'SALE_NOT_ACTIVE', message: 'Current transaction is not active.' };
     }
 
-    // Lookup product by barcode or ID
-    const product = db.queryOne(
+    // Lookup product by barcode or ID (tenant isolated with global FMCG fallback)
+    let product = db.queryOne(
       'SELECT * FROM products WHERE tenant_id = ? AND (barcode = ? OR id = ? OR sku = ?)',
       [tenantId, barcodeOrId, barcodeOrId, barcodeOrId]
     );
+
+    if (!product) {
+      product = db.queryOne(
+        'SELECT * FROM products WHERE barcode = ? OR id = ? OR sku = ?',
+        [barcodeOrId, barcodeOrId, barcodeOrId]
+      );
+    }
 
     if (!product) {
       return { success: false, error: 'PRODUCT_NOT_FOUND', message: `Product not found for barcode "${barcodeOrId}".` };

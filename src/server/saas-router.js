@@ -72,7 +72,7 @@ class SaasRouter {
         const q = (query.q || '').trim();
         if (!q) return this.sendJson(res, 200, { products: [] });
         const pattern = `%${q}%`;
-        const products = db.queryAll(
+        let products = db.queryAll(
           `SELECT p.*, COALESCE(i.quantity, 0) as stock_quantity 
            FROM products p 
            LEFT JOIN inventory i ON p.id = i.product_id AND i.branch_id = ?
@@ -80,21 +80,59 @@ class SaasRouter {
            LIMIT 12`,
           [ctx.branchId || 'BR-001', tenantId, pattern, pattern, pattern]
         );
+
+        const supabaseUrl = process.env.SUPABASE_URL;
+        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+        if ((!products || products.length === 0) && supabaseUrl && supabaseKey) {
+          try {
+            const sRes = await fetch(`${supabaseUrl}/rest/v1/products?or=(barcode.ilike.*${encodeURIComponent(q)}*,sku.ilike.*${encodeURIComponent(q)}*,name.ilike.*${encodeURIComponent(q)}*)&limit=12`, {
+              headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+            });
+            if (sRes.ok) {
+              const sups = await sRes.json();
+              if (sups && sups.length > 0) products = sups;
+            }
+          } catch (e) {}
+        }
         return this.sendJson(res, 200, { products });
       }
 
-      // M-Pesa Status Poller
+      // M-Pesa Status Poller (Live Supabase Cloud First with Local Sync)
       if (pathname.match(/^\/api\/mpesa\/status\/([^/]+)$/) && req.method === 'GET') {
         const saleId = pathname.split('/')[4];
-        const tx = db.queryOne('SELECT * FROM mpesa_transactions WHERE sale_id = ? ORDER BY created_at DESC LIMIT 1', [saleId]);
-        const sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [saleId]);
+        let tx = db.queryOne('SELECT * FROM mpesa_transactions WHERE sale_id = ? ORDER BY created_at DESC LIMIT 1', [saleId]);
+        let sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [saleId]);
+
+        // Direct Cloud Query to Supabase PostgREST
+        const supabaseUrl = process.env.SUPABASE_URL;
+        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
+        if (supabaseUrl && supabaseKey && (!sale || sale.status !== 'COMPLETED')) {
+          try {
+            const mpesaRes = await fetch(`${supabaseUrl}/rest/v1/mpesa_transactions?sale_id=eq.${encodeURIComponent(saleId)}&order=created_at.desc&limit=1`, {
+              headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+            });
+            if (mpesaRes.ok) {
+              const rows = await mpesaRes.json();
+              if (rows && rows.length > 0) tx = rows[0];
+            }
+
+            const saleRes = await fetch(`${supabaseUrl}/rest/v1/sales?id=eq.${encodeURIComponent(saleId)}&limit=1`, {
+              headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+            });
+            if (saleRes.ok) {
+              const sRows = await saleRes.json();
+              if (sRows && sRows.length > 0) sale = sRows[0];
+            }
+          } catch (e) {}
+        }
+
         return this.sendJson(res, 200, {
           saleId,
-          isPaid: sale ? sale.status === 'COMPLETED' : false,
-          saleStatus: sale ? sale.status : 'UNKNOWN',
-          mpesaStatus: tx ? tx.status : 'NONE',
-          mpesaReceipt: tx ? tx.mpesa_receipt : (sale ? sale.mpesa_code : null),
-          amountKes: tx ? tx.amount_kes : 0
+          isPaid: sale ? sale.status === 'COMPLETED' : (tx ? tx.status === 'COMPLETED' : false),
+          saleStatus: sale ? (sale.status || 'UNKNOWN') : (tx && tx.status === 'COMPLETED' ? 'COMPLETED' : 'PENDING'),
+          mpesaStatus: tx ? (tx.status || 'NONE') : 'NONE',
+          mpesaReceipt: tx ? (tx.mpesa_receipt || (sale ? sale.mpesa_code : null)) : (sale ? sale.mpesa_code : null),
+          amountKes: tx ? (tx.amount_kes || tx.amount || 0) : 0
         });
       }
 
@@ -127,9 +165,23 @@ class SaasRouter {
         });
       }
 
-      // 4. Products Catalog (Kenyan FMCG)
+      // 4. Products Catalog (Kenyan FMCG with Direct Supabase Cloud Sync)
       if (pathname === '/api/products' && req.method === 'GET') {
-        const products = db.queryAll('SELECT * FROM products WHERE tenant_id = ? AND is_active = 1', [tenantId]);
+        let products = db.queryAll('SELECT * FROM products WHERE tenant_id = ? AND is_active = 1', [tenantId]);
+        
+        const supabaseUrl = process.env.SUPABASE_URL;
+        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+        if ((!products || products.length === 0) && supabaseUrl && supabaseKey) {
+          try {
+            const sRes = await fetch(`${supabaseUrl}/rest/v1/products?is_active=eq.true&order=name.asc`, {
+              headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+            });
+            if (sRes.ok) {
+              const sups = await sRes.json();
+              if (sups && sups.length > 0) products = sups;
+            }
+          } catch (e) {}
+        }
         return this.sendJson(res, 200, { products });
       }
 
@@ -141,6 +193,35 @@ class SaasRouter {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
           [prodId, tenantId, name, barcode, sku || barcode, category || 'General', unit || 'PCS', costPriceKes || 0, sellingPriceKes || 0, vatRate !== undefined ? vatRate : 16.0]
         );
+
+        // Sync directly to Supabase products table
+        const supabaseUrl = process.env.SUPABASE_URL;
+        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+        if (supabaseUrl && supabaseKey) {
+          try {
+            fetch(`${supabaseUrl}/rest/v1/products`, {
+              method: 'POST',
+              headers: {
+                'apikey': supabaseKey,
+                'Authorization': `Bearer ${supabaseKey}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'return=minimal'
+              },
+              body: JSON.stringify({
+                name,
+                barcode,
+                sku: sku || barcode,
+                category: category || 'General',
+                unit: unit || 'PCS',
+                cost_price_kes: costPriceKes || 0,
+                selling_price_kes: sellingPriceKes || 0,
+                vat_rate: vatRate !== undefined ? vatRate : 16.0,
+                is_active: true
+              })
+            }).catch(() => {});
+          } catch (e) {}
+        }
+
         return this.sendJson(res, 201, { success: true, productId: prodId });
       }
 
@@ -305,7 +386,7 @@ class SaasRouter {
       }
 
       if (pathname === '/api/hierarchy/create-owner' && req.method === 'POST') {
-        const result = HierarchyService.createBusinessOwner({
+        const result = await HierarchyService.createBusinessOwner({
           creatorRole: ctx.userRole || body.creatorRole || 'super_admin',
           ...body
         });
@@ -313,7 +394,7 @@ class SaasRouter {
       }
 
       if (pathname === '/api/hierarchy/create-admin' && req.method === 'POST') {
-        const result = HierarchyService.createBusinessAdmin({
+        const result = await HierarchyService.createBusinessAdmin({
           creatorRole: ctx.userRole || body.creatorRole || 'owner',
           creatorTenantId: tenantId,
           ...body
@@ -322,7 +403,7 @@ class SaasRouter {
       }
 
       if (pathname === '/api/hierarchy/create-branch-manager' && req.method === 'POST') {
-        const result = HierarchyService.createBranchManager({
+        const result = await HierarchyService.createBranchManager({
           creatorRole: ctx.userRole || body.creatorRole || 'admin',
           creatorTenantId: tenantId,
           ...body
@@ -331,7 +412,7 @@ class SaasRouter {
       }
 
       if (pathname === '/api/hierarchy/create-staff' && req.method === 'POST') {
-        const result = HierarchyService.createStaff({
+        const result = await HierarchyService.createStaff({
           creatorRole: ctx.userRole || body.creatorRole || 'branch_manager',
           creatorTenantId: tenantId,
           creatorBranchId: ctx.branchId || body.branchId,
