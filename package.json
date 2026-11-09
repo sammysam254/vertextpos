@@ -1,0 +1,35 @@
+{
+  "name": "vertext-pos",
+  "version": "2.0.0",
+  "description": "Vertext POS - Enterprise Kenyan Supermarket POS & Retail Management SaaS Platform (KES / M-Pesa / eTIMS / PWA)",
+  "main": "src/server/app.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sammysam254/vertextpos.git"
+  },
+  "scripts": {
+    "start": "node src/server/app.js",
+    "test": "node tests/saas-acceptance-test.js",
+    "test:saas": "node tests/saas-acceptance-test.js",
+    "test:biometric": "node tests/acceptance-test.js",
+    "test:crypto": "node tests/crypto-test.js",
+    "test:all": "node tests/saas-acceptance-test.js && node tests/acceptance-test.js && node tests/crypto-test.js",
+    "seed": "node src/db/saas-seed.js"
+  },
+  "keywords": [
+    "vertext-pos",
+    "supermarket-pos",
+    "saas",
+    "kenya",
+    "kes",
+    "mpesa-daraja",
+    "etims",
+    "kra",
+    "esc-pos",
+    "multi-tenant",
+    "retail",
+    "pwa"
+  ],
+  "author": "Vertext Digital",
+  "license": "UNLICENSED"
+}

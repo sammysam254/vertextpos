@@ -1,0 +1,20 @@
+{
+  "name": "Vertext POS — Enterprise Supermarket Retail Platform",
+  "short_name": "Vertext POS",
+  "description": "High-velocity Cloud Supermarket POS, M-Pesa Daraja 2.0 & KRA eTIMS Retail Management SaaS",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
+

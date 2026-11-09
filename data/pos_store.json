@@ -1,0 +1,343 @@
+{
+  "users": [
+    {
+      "id": "user_s01",
+      "username": "alice.vance",
+      "name": "Alice Vance",
+      "role": "supervisor",
+      "title": "Senior Floor Supervisor",
+      "branchId": "BR-001",
+      "allowedRegisters": [
+        "ALL"
+      ],
+      "permissions": [
+        "SUSPEND_TRANSACTION",
+        "RESUME_TRANSACTION",
+        "BIOMETRIC_ENROLL",
+        "PRICE_OVERRIDE"
+      ],
+      "pin": "1234",
+      "active": true,
+      "failedBiometricCount": 0,
+      "lockedUntil": null
+    },
+    {
+      "id": "user_s02",
+      "username": "bob.chen",
+      "name": "Bob Chen",
+      "role": "supervisor",
+      "title": "Shift Supervisor",
+      "branchId": "BR-001",
+      "allowedRegisters": [
+        "ALL"
+      ],
+      "permissions": [
+        "SUSPEND_TRANSACTION",
+        "RESUME_TRANSACTION"
+      ],
+      "pin": "2345",
+      "active": true,
+      "failedBiometricCount": 0,
+      "lockedUntil": null
+    },
+    {
+      "id": "user_s03",
+      "username": "carol.diaz",
+      "name": "Carol Diaz",
+      "role": "supervisor",
+      "title": "Uptown Branch Supervisor",
+      "branchId": "BR-002",
+      "allowedRegisters": [
+        "ALL"
+      ],
+      "permissions": [
+        "SUSPEND_TRANSACTION",
+        "RESUME_TRANSACTION"
+      ],
+      "pin": "3456",
+      "active": true,
+      "failedBiometricCount": 0,
+      "lockedUntil": null
+    },
+    {
+      "id": "user_c01",
+      "username": "dave.miller",
+      "name": "Dave Miller",
+      "role": "cashier",
+      "title": "POS Cashier 1",
+      "branchId": "BR-001",
+      "allowedRegisters": [
+        "REG-01"
+      ],
+      "permissions": [
+        "POS_CHECKOUT",
+        "ITEM_SCAN"
+      ],
+      "pin": "0000",
+      "active": true,
+      "failedBiometricCount": 0,
+      "lockedUntil": null
+    },
+    {
+      "id": "user_c02",
+      "username": "sarah.jenkins",
+      "name": "Sarah Jenkins",
+      "role": "cashier",
+      "title": "POS Cashier 2",
+      "branchId": "BR-001",
+      "allowedRegisters": [
+        "REG-02"
+      ],
+      "permissions": [
+        "POS_CHECKOUT",
+        "ITEM_SCAN"
+      ],
+      "pin": "1111",
+      "active": true,
+      "failedBiometricCount": 0,
+      "lockedUntil": null
+    },
+    {
+      "id": "user_admin",
+      "username": "eleanor.wright",
+      "name": "Eleanor Wright",
+      "role": "administrator",
+      "title": "General Store Director",
+      "branchId": "BR-001",
+      "allowedRegisters": [
+        "ALL"
+      ],
+      "permissions": [
+        "EMERGENCY_OVERRIDE",
+        "SYSTEM_CONFIG",
+        "AUDIT_REVIEW"
+      ],
+      "emergencyPasswordHash": "66e0349c8f2ad9295277c77020892042d46f9bbf93caecbcc61e876ad06dda85283392c431c1cde684716aa8ffc2d47f25956793993438d9ef994e3e5575aeb8",
+      "emergencyPasswordSalt": "aa78436974322cac5ae2dc46725888ba",
+      "active": true
+    }
+  ],
+  "biometricCredentials": [
+    {
+      "id": "cred_alice_wbf_01",
+      "userId": "user_s01",
+      "userName": "Alice Vance",
+      "algorithm": "ES256",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECcnoLKSjKCxjtaGhj9cH2uTMK5w3\ndVlHU+lMTimScOYrePqZAkyUWJd5pB9hik0AebXO9eisenXpvTSVLX+7Kg==\n-----END PUBLIC KEY-----\n",
+      "signCount": 1,
+      "deviceType": "WBF_FINGERPRINT",
+      "deviceSerial": "DP-UAREU4500-SN8492",
+      "enrolledAt": "2026-10-10T19:34:24.230Z",
+      "revokedAt": null,
+      "status": "ACTIVE",
+      "branchPermissions": [
+        "BR-001"
+      ],
+      "enrolledBy": "user_s01"
+    },
+    {
+      "id": "cred_bob_wbf_01",
+      "userId": "user_s02",
+      "userName": "Bob Chen",
+      "algorithm": "ES256",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmOR0gf08s9X4X2b7sdjelpasM81C\nTrdypprR4kHLxW4zAdUpxqdSEspEBqSPwJmifwy1hTuwdlckf+lCZe74Bg==\n-----END PUBLIC KEY-----\n",
+      "signCount": 1,
+      "deviceType": "WBF_FINGERPRINT",
+      "deviceSerial": "DP-UAREU4500-SN8492",
+      "enrolledAt": "2026-10-25T19:34:24.230Z",
+      "revokedAt": null,
+      "status": "ACTIVE",
+      "branchPermissions": [
+        "BR-001"
+      ],
+      "enrolledBy": "user_s02"
+    },
+    {
+      "id": "cred_carol_wbf_01",
+      "userId": "user_s03",
+      "userName": "Carol Diaz",
+      "algorithm": "ES256",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZ1Oip9FGhe/51NapCDveFO0Yi8Hh\ncNFdmDoB6abE0wM9JVnhxHikaEq0D0IBexfZATJGmyUmHmG8Gw4PNXiegw==\n-----END PUBLIC KEY-----\n",
+      "signCount": 1,
+      "deviceType": "WBF_FINGERPRINT",
+      "deviceSerial": "DP-UAREU4500-SN9999",
+      "enrolledAt": "2026-11-04T19:34:24.230Z",
+      "revokedAt": null,
+      "status": "ACTIVE",
+      "branchPermissions": [
+        "BR-002"
+      ],
+      "enrolledBy": "user_s03"
+    },
+    {
+      "id": "cred_cashier_dave_01",
+      "userId": "user_c01",
+      "userName": "Dave Miller (Cashier)",
+      "algorithm": "ES256",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE52PdjHhHVFz/xsyTsHXGR9N5nSdM\nbl+2JWPM+WdNqlpWFyqRVGHrw+C/xNVPkG7sYCAPa4jKH7PnreQsOwMwkQ==\n-----END PUBLIC KEY-----\n",
+      "signCount": 1,
+      "deviceType": "WBF_FINGERPRINT",
+      "deviceSerial": "DP-UAREU4500-SN8492",
+      "enrolledAt": "2026-11-07T19:34:24.230Z",
+      "revokedAt": null,
+      "status": "ACTIVE",
+      "branchPermissions": [
+        "BR-001"
+      ],
+      "enrolledBy": "user_c01"
+    }
+  ],
+  "devices": [
+    {
+      "id": "DEV-FP-01",
+      "name": "DigitalPersona U.are.U 4500 USB Reader",
+      "driver": "WBF_DRIVER",
+      "manufacturer": "DigitalPersona / HID Global",
+      "model": "U.are.U 4500",
+      "serialNumber": "DP-UAREU4500-SN8492",
+      "status": "CONNECTED",
+      "branchId": "BR-001",
+      "registerId": "REG-01",
+      "firmwareVersion": "v3.1.2024",
+      "supportedModes": [
+        "WBF_WINBIO",
+        "DEVICE_CHALLENGE_RESPONSE"
+      ],
+      "lastHealthCheck": "2026-11-09T19:34:24.230Z"
+    },
+    {
+      "id": "DEV-FP-02",
+      "name": "SecuGen Hamster Pro 20 USB Reader",
+      "driver": "USB_SDK_DRIVER",
+      "manufacturer": "SecuGen Corporation",
+      "model": "Hamster Pro 20 (HU20)",
+      "serialNumber": "SG-HAMSTER20-SN4105",
+      "status": "STANDBY",
+      "branchId": "BR-001",
+      "registerId": "REG-02",
+      "firmwareVersion": "v2.8.2023",
+      "supportedModes": [
+        "SECUGEN_SDK",
+        "DEVICE_CHALLENGE_RESPONSE"
+      ],
+      "lastHealthCheck": "2026-11-09T19:34:24.230Z"
+    },
+    {
+      "id": "DEV-FP-03",
+      "name": "Windows Hello Platform Authenticator",
+      "driver": "WEBAUTHN_DRIVER",
+      "manufacturer": "Microsoft / Platform TPM 2.0",
+      "model": "Windows Hello Biometric Provider",
+      "serialNumber": "WH-HELLO-PLATFORM-01",
+      "status": "CONNECTED",
+      "branchId": "BR-001",
+      "registerId": "REG-01",
+      "firmwareVersion": "WBF 10.0",
+      "supportedModes": [
+        "WEBAUTHN_FIDO2",
+        "PLATFORM_ENCLAVE"
+      ],
+      "lastHealthCheck": "2026-11-09T19:34:24.230Z"
+    }
+  ],
+  "transactions": [],
+  "auditLogs": [
+    {
+      "id": "LOG-1794252864230-7903",
+      "timestamp": "2026-11-09T19:34:24.230Z",
+      "eventType": "SYSTEM_INITIALIZATION",
+      "userId": "user_admin",
+      "userName": "Eleanor Wright",
+      "userRole": "administrator",
+      "branchId": "BR-001",
+      "registerId": "REG-01",
+      "action": "SYSTEM_BOOT",
+      "status": "SUCCESS",
+      "deviceId": "DEV-FP-01",
+      "reason": "Initial supermarket POS biometric configuration and seed load"
+    }
+  ],
+  "challenges": {},
+  "products": [
+    {
+      "id": "PRD-001",
+      "barcode": "011110000018",
+      "name": "Organic Whole Milk 1 Gallon",
+      "price": 4.89,
+      "category": "Dairy",
+      "stock": 45
+    },
+    {
+      "id": "PRD-002",
+      "barcode": "011110000025",
+      "name": "Artisan Sourdough Loaf 500g",
+      "price": 3.99,
+      "category": "Bakery",
+      "stock": 30
+    },
+    {
+      "id": "PRD-003",
+      "barcode": "011110000032",
+      "name": "Crisp Honeycrisp Apples 1kg",
+      "price": 5.49,
+      "category": "Produce",
+      "stock": 120
+    },
+    {
+      "id": "PRD-004",
+      "barcode": "011110000049",
+      "name": "Fair Trade Organic Dark Roast 250g",
+      "price": 8.99,
+      "category": "Beverage",
+      "stock": 60
+    },
+    {
+      "id": "PRD-005",
+      "barcode": "011110000056",
+      "name": "Free-Range Brown Eggs Grade A (12pk)",
+      "price": 4.59,
+      "category": "Dairy",
+      "stock": 80
+    },
+    {
+      "id": "PRD-006",
+      "barcode": "011110000063",
+      "name": "Cold Pressed Extra Virgin Olive Oil 500ml",
+      "price": 11.29,
+      "category": "Pantry",
+      "stock": 25
+    },
+    {
+      "id": "PRD-007",
+      "barcode": "011110000070",
+      "name": "Belgian Dark Chocolate 85% Cacao 100g",
+      "price": 3.49,
+      "category": "Snacks",
+      "stock": 95
+    },
+    {
+      "id": "PRD-008",
+      "barcode": "011110000087",
+      "name": "Fresh Organic Orange Juice 1L",
+      "price": 4.29,
+      "category": "Beverage",
+      "stock": 40
+    },
+    {
+      "id": "PRD-009",
+      "barcode": "011110000094",
+      "name": "Grass-Fed Angus Beef Patties 4pk",
+      "price": 12.99,
+      "category": "Meat",
+      "stock": 35
+    },
+    {
+      "id": "PRD-010",
+      "barcode": "011110000100",
+      "name": "Organic Baby Spinach 300g",
+      "price": 2.99,
+      "category": "Produce",
+      "stock": 50
+    }
+  ]
+}
