@@ -9,11 +9,14 @@ const fs = require('fs');
  */
 class SqliteStore {
   constructor(dbPath) {
-    const dataDir = path.join(__dirname, '..', '..', 'data');
+    const isServerless = !!(process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT || process.env.VERCEL);
+    const dataDir = isServerless ? '/tmp' : path.join(__dirname, '..', '..', 'data');
     if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
+      try {
+        fs.mkdirSync(dataDir, { recursive: true });
+      } catch (e) {}
     }
-    this.dbPath = dbPath || path.join(dataDir, 'saas_pos.db');
+    this.dbPath = dbPath || (isServerless ? path.join('/tmp', 'saas_pos.db') : path.join(dataDir, 'saas_pos.db'));
     this.db = new DatabaseSync(this.dbPath);
     this.initPragmas();
     this.initTables();

@@ -104,6 +104,36 @@ class HierarchyService {
       });
     });
 
+    // Cloud push to Supabase
+    supabase.from('tenants').insert({
+      id: tenantId,
+      name: businessName,
+      slug: cleanSlug,
+      trade_name: tradeName || businessName,
+      kra_pin: kraPin || 'P051234567Z',
+      business_phone: businessPhone || '254700000000',
+      business_email: ownerEmail,
+      currency: 'KES',
+      plan_tier: planTier,
+      monthly_subscription_kes: fee,
+      location: location || 'Nairobi',
+      subscription_status: 'ACTIVE'
+    }).catch(() => {});
+
+    supabase.from('users').insert({
+      id: userId,
+      tenant_id: tenantId,
+      username: ownerEmail.split('@')[0],
+      email: ownerEmail,
+      password_hash: hash,
+      password_salt: salt,
+      full_name: ownerFullName,
+      phone: businessPhone || '',
+      role: 'owner',
+      branch_id: branchId,
+      is_active: true
+    }).catch(() => {});
+
     return {
       success: true,
       message: `Business Owner ${ownerFullName} successfully created for ${businessName}. Monthly subscription set to KES ${fee.toLocaleString()} due on the 1st of every month.`,

@@ -1,13 +1,15 @@
 // Biometric Supervisor Authorization POS Configuration
 const path = require('path');
 
+const isServerless = !!(process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT || process.env.VERCEL);
+
 module.exports = {
   server: {
     port: process.env.PORT || 3000,
     host: '127.0.0.1'
   },
   db: {
-    storagePath: path.join(__dirname, '..', 'data', 'pos_store.json')
+    storagePath: isServerless ? path.join('/tmp', 'pos_store.json') : path.join(__dirname, '..', 'data', 'pos_store.json')
   },
   security: {
     // Single-use authorization challenge validity in milliseconds (60 seconds)

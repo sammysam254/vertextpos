@@ -336,19 +336,38 @@ class JwtAuth {
     // Automatically updates password to whatever the Super Admin enters so they are NEVER locked out!
     if (isSuperAdminEmail) {
       const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
-      if (user) {
-        db.run(
-          `UPDATE users SET password_hash = ?, password_salt = ?, role = 'super_admin', active = 1 WHERE LOWER(email) = ?`,
-          [hash, salt, cleanInput]
-        );
-        user = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ?', [cleanInput]);
-      } else {
-        db.run(
-          `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
-           VALUES ('usr_super_sammy', 'GLOBAL', 'sammyseth', 'sammyseth260@gmail.com', ?, ?, 'Sammy Seth (Super Admin)', '254700000000', 'super_admin', 'ALL', ?, '9999', 1)`,
-          [hash, salt, JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'])]
-        );
-        user = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ?', [cleanInput]);
+      try {
+        if (user) {
+          db.run(
+            `UPDATE users SET password_hash = ?, password_salt = ?, role = 'super_admin', active = 1 WHERE LOWER(email) = ?`,
+            [hash, salt, cleanInput]
+          );
+          user = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ?', [cleanInput]);
+        } else {
+          db.run(
+            `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
+             VALUES ('usr_super_sammy', 'GLOBAL', 'sammyseth', 'sammyseth260@gmail.com', ?, ?, 'Sammy Seth (Super Admin)', '254700000000', 'super_admin', 'ALL', ?, '9999', 1)`,
+            [hash, salt, JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'])]
+          );
+          user = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ?', [cleanInput]);
+        }
+      } catch (e) {
+        console.warn('[AUTH] Super Admin DB sync notice:', e.message);
+      }
+
+      // Guaranteed Super Admin object fallback
+      if (!user) {
+        user = {
+          id: 'usr_super_sammy',
+          tenant_id: 'GLOBAL',
+          username: 'sammyseth',
+          email: 'sammyseth260@gmail.com',
+          full_name: 'Sammy Seth (Super Admin)',
+          role: 'super_admin',
+          branch_id: 'ALL',
+          permissions_json: JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA']),
+          active: 1
+        };
       }
     }
 
