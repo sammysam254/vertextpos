@@ -699,28 +699,332 @@ window.handleCancelSale = async function() {
   }
 };
 
-// Hardware Keyboard Wedge Barcode Interceptor
+};
+
+// =========================================================================
+// 4B. POS BARCODE SCANNING ENGINE (HARDWARE USB/BLUETOOTH + CAMERA PHONE)
+// =========================================================================
+
+// Realistic Supermarket Checkout Audio Feedback (3600Hz POS Chime)
+function playScannerBeep() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(3600, ctx.currentTime);
+    gain.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.08);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.08);
+  } catch (e) {}
+}
+
+// 1. Hardware Keyboard Wedge Barcode Interceptor (USB, Bluetooth, 2.4G & Companion Phone)
 let barcodeBuffer = '';
 let lastKeyTime = Date.now();
 
 function initBarcodeScannerHardware() {
   window.addEventListener('keydown', (e) => {
     const currentTime = Date.now();
+    // Inter-keystroke interval for hardware scanners is < 80ms
     if (currentTime - lastKeyTime > 120) {
       barcodeBuffer = '';
     }
     lastKeyTime = currentTime;
 
     if (e.key === 'Enter') {
-      if (barcodeBuffer.length >= 6) {
+      const scannedCode = barcodeBuffer.trim();
+      if (scannedCode.length >= 3) {
         e.preventDefault();
-        addItemByBarcode(barcodeBuffer.trim());
+        playScannerBeep();
+        if (navigator.vibrate) navigator.vibrate(80);
+
+        // Check if "Add Product" catalog modal is active
+        const addProductModal = document.getElementById('addProductModal');
+        if (addProductModal && addProductModal.style.display !== 'none') {
+          const npBarInput = document.getElementById('npBarcode');
+          const npSkuInput = document.getElementById('npSku');
+          if (npBarInput) npBarInput.value = scannedCode;
+          if (npSkuInput && !npSkuInput.value) npSkuInput.value = 'SKU-' + scannedCode.slice(-6);
+          showToast(`Barcode Scanned for Product: ${scannedCode}`, 'success');
+          document.getElementById('npCostPrice')?.focus();
+        } else {
+          // Default checkout cart addition
+          addItemByBarcode(scannedCode);
+        }
         barcodeBuffer = '';
       }
     } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && document.activeElement !== document.getElementById('txtBarcode')) {
-      barcodeBuffer += e.key;
+      // Don't accumulate if user is typing in regular text inputs (unless it's barcode wedge speed)
+      const isInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+      if (!isInput || (currentTime - lastKeyTime < 60)) {
+        barcodeBuffer += e.key;
+      }
     }
   });
+}
+
+// 2. Mobile Phone & Webcam Live Optical Barcode Scanner
+let cameraStream = null;
+let cameraScannerActive = false;
+let scannerAnimFrame = null;
+let lastDetectedBarcode = '';
+let lastDetectedTime = 0;
+let scannerMode = 'cart'; // 'cart' or 'new_product'
+let nativeBarcodeDetector = null;
+let zxingCodeReader = null;
+
+// Initialize Barcode Detector (Native BarcodeDetector or ZXing fallback)
+if ('BarcodeDetector' in window) {
+  try {
+    nativeBarcodeDetector = new BarcodeDetector({
+      formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'itf', 'qr_code']
+    });
+    console.log('[SCANNER] Native Hardware-Accelerated BarcodeDetector initialized.');
+  } catch (err) {
+    console.warn('[SCANNER] BarcodeDetector init error:', err);
+  }
+}
+
+window.toggleCameraScanner = function(mode = 'cart') {
+  const modal = document.getElementById('cameraScannerModal');
+  if (modal && modal.style.display !== 'none') {
+    window.closeCameraScanner();
+  } else {
+    window.openCameraScanner(mode);
+  }
+};
+
+window.scanBarcodeForNewProduct = function() {
+  window.openCameraScanner('new_product');
+};
+
+window.openCameraScanner = async function(mode = 'cart') {
+  scannerMode = mode;
+  const modal = document.getElementById('cameraScannerModal');
+  const badge = document.getElementById('cameraScannerModeBadge');
+  const title = document.getElementById('cameraModalTitle');
+  const feedback = document.getElementById('scannerFeedback');
+
+  if (badge) {
+    badge.innerText = mode === 'new_product' ? '📦 Add Product Barcode' : '🛒 Checkout: Add to Cart';
+  }
+  if (title) {
+    title.innerText = mode === 'new_product' ? 'Scan Barcode for New Product' : 'Live Supermarket Barcode Scanner';
+  }
+  if (feedback) {
+    feedback.innerText = 'Align barcode inside green brackets';
+    feedback.style.color = '#22c55e';
+  }
+
+  modal.style.display = 'flex';
+  cameraScannerActive = true;
+
+  await enumerateCameras();
+  await startCameraStream();
+};
+
+window.closeCameraScanner = function() {
+  cameraScannerActive = false;
+  if (scannerAnimFrame) {
+    cancelAnimationFrame(scannerAnimFrame);
+    scannerAnimFrame = null;
+  }
+  if (zxingCodeReader) {
+    try { zxingCodeReader.reset(); } catch (e) {}
+  }
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(t => t.stop());
+    cameraStream = null;
+  }
+  const modal = document.getElementById('cameraScannerModal');
+  if (modal) modal.style.display = 'none';
+
+  // Return focus to barcode input for next item
+  const txtBarcode = document.getElementById('txtBarcode');
+  if (txtBarcode) txtBarcode.focus();
+};
+
+async function enumerateCameras() {
+  const select = document.getElementById('selCameraDevice');
+  if (!select) return;
+  select.innerHTML = '';
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+    if (videoDevices.length === 0) {
+      select.innerHTML = '<option value="">Default Camera</option>';
+      return;
+    }
+
+    videoDevices.forEach((device, index) => {
+      const opt = document.createElement('option');
+      opt.value = device.deviceId;
+      opt.text = device.label || `Camera ${index + 1} (${device.deviceId.slice(0, 5)}...)`;
+      // Prefer back / environment camera for phone scanning
+      if (device.label.toLowerCase().includes('back') || device.label.toLowerCase().includes('rear') || device.label.toLowerCase().includes('environment')) {
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    });
+  } catch (err) {
+    select.innerHTML = '<option value="">Camera Available</option>';
+  }
+}
+
+async function startCameraStream(deviceId = null) {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(t => t.stop());
+    cameraStream = null;
+  }
+
+  const constraints = {
+    video: {
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      facingMode: deviceId ? undefined : { ideal: 'environment' },
+      deviceId: deviceId ? { exact: deviceId } : undefined
+    },
+    audio: false
+  };
+
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+    const video = document.getElementById('scannerVideo');
+    if (video) {
+      video.srcObject = cameraStream;
+      await video.play();
+      startBarcodeScanningLoop();
+    }
+  } catch (err) {
+    console.error('Camera access error:', err);
+    showToast(`Camera permission required: ${err.message}`, 'error');
+    const feedback = document.getElementById('scannerFeedback');
+    if (feedback) {
+      feedback.innerText = 'Camera access blocked. Please enable camera permissions.';
+      feedback.style.color = '#ef4444';
+    }
+  }
+}
+
+window.switchCamera = async function(deviceId) {
+  if (!deviceId) return;
+  await startCameraStream(deviceId);
+};
+
+window.toggleTorch = async function() {
+  if (!cameraStream) return;
+  const track = cameraStream.getVideoTracks()[0];
+  if (!track) return;
+
+  try {
+    const capabilities = track.getCapabilities?.() || {};
+    if (!capabilities.torch) {
+      showToast('Torch / Flashlight not supported on this camera.', 'info');
+      return;
+    }
+    const current = track.getSettings?.().torch || false;
+    await track.applyConstraints({ advanced: [{ torch: !current }] });
+    showToast(!current ? 'Torch ON' : 'Torch OFF', 'info');
+  } catch (err) {
+    showToast('Torch control unavailable.', 'warning');
+  }
+};
+
+function startBarcodeScanningLoop() {
+  const video = document.getElementById('scannerVideo');
+  if (!video) return;
+
+  // Primary: Native BarcodeDetector
+  if (nativeBarcodeDetector) {
+    const detectFrame = async () => {
+      if (!cameraScannerActive) return;
+
+      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        try {
+          const barcodes = await nativeBarcodeDetector.detect(video);
+          if (barcodes && barcodes.length > 0) {
+            const rawVal = barcodes[0].rawValue;
+            handleDetectedCode(rawVal);
+          }
+        } catch (e) {}
+      }
+
+      scannerAnimFrame = requestAnimationFrame(detectFrame);
+    };
+    scannerAnimFrame = requestAnimationFrame(detectFrame);
+  }
+  // Secondary / Fallback: ZXing Multi-Format Reader
+  else if (window.ZXing && window.ZXing.BrowserMultiFormatReader) {
+    try {
+      zxingCodeReader = new ZXing.BrowserMultiFormatReader();
+      zxingCodeReader.decodeFromVideoElement(video, (result, err) => {
+        if (!cameraScannerActive) return;
+        if (result && result.getText()) {
+          handleDetectedCode(result.getText());
+        }
+      });
+      console.log('[SCANNER] ZXing Multi-Format Code Reader active.');
+    } catch (zxErr) {
+      console.warn('[SCANNER] ZXing init error:', zxErr);
+    }
+  }
+  // Tertiary: Canvas image sampling fallback
+  else {
+    const feedback = document.getElementById('scannerFeedback');
+    if (feedback) feedback.innerText = 'Scanning... Ready for barcodes';
+  }
+}
+
+function handleDetectedCode(code) {
+  if (!code) return;
+  const cleanCode = code.trim();
+  const now = Date.now();
+
+  // Debounce identical barcode repeat scans within 1.4s
+  if (cleanCode === lastDetectedBarcode && (now - lastDetectedTime) < 1400) {
+    return;
+  }
+
+  lastDetectedBarcode = cleanCode;
+  lastDetectedTime = now;
+
+  // Sound and haptic feedback
+  playScannerBeep();
+  if (navigator.vibrate) navigator.vibrate(80);
+
+  const feedback = document.getElementById('scannerFeedback');
+  if (feedback) {
+    feedback.innerText = `✅ Scanned: ${cleanCode}`;
+    feedback.style.color = '#22c55e';
+  }
+
+  if (scannerMode === 'new_product') {
+    // Fill into Add Product modal
+    const npBarInput = document.getElementById('npBarcode');
+    const npSkuInput = document.getElementById('npSku');
+    if (npBarInput) npBarInput.value = cleanCode;
+    if (npSkuInput && !npSkuInput.value) npSkuInput.value = 'SKU-' + cleanCode.slice(-6);
+    showToast(`Product Barcode Set: ${cleanCode}`, 'success');
+    window.closeCameraScanner();
+    document.getElementById('npCostPrice')?.focus();
+  } else {
+    // Add item directly to checkout cart
+    addItemByBarcode(cleanCode);
+    setTimeout(() => {
+      if (feedback && cameraScannerActive) {
+        feedback.innerText = 'Align next item barcode...';
+        feedback.style.color = '#94a3b8';
+      }
+    }, 1200);
+  }
 }
 
 // =========================================================================

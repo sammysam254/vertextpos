@@ -1816,7 +1816,12 @@
           <div class="form-row">
             <div class="form-group flex-1">
               <label>EAN-13 Barcode:</label>
-              <input type="text" id="npBarcode" class="form-control" placeholder="616XXXXXXXXXX" required>
+              <div style="display:flex; gap:6px;">
+                <input type="text" id="npBarcode" class="form-control" placeholder="616XXXXXXXXXX" required>
+                <button type="button" class="btn btn-secondary" onclick="window.scanBarcodeForNewProduct()" title="Scan product barcode with camera">
+                  📷 Scan
+                </button>
+              </div>
             </div>
             <div class="form-group flex-1">
               <label>SKU Code:</label>
@@ -2016,6 +2021,58 @@
     </div>
   </div>
 
+  <!-- MODAL: LIVE CAMERA / PHONE BARCODE SCANNER (AUTO-DETECT EAN-13, UPC, QR) -->
+  <div id="cameraScannerModal" class="modal-backdrop" style="display:none;">
+    <div class="modal-dialog modal-scanner-dialog">
+      <div class="modal-header" style="background:#0f172a; border-bottom:1px solid rgba(255,255,255,0.1); padding:14px 18px;">
+        <div class="modal-title-group">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          <h3 id="cameraModalTitle" style="color:#ffffff; margin:0; font-size:1.05rem;">Live Barcode Scanner</h3>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span id="cameraScannerModeBadge" class="scanner-mode-pill">🛒 Add to Cart</span>
+          <button class="modal-close-btn" style="color:#ffffff;" onclick="window.closeCameraScanner()">&times;</button>
+        </div>
+      </div>
+
+      <div class="modal-body" style="padding:0; background:#000000; position:relative;">
+        <div class="scanner-viewfinder-box">
+          <video id="scannerVideo" autoplay playsinline muted></video>
+          <canvas id="scannerCanvas" style="display:none;"></canvas>
+
+          <!-- Optical Target Reticle & Laser Sweep -->
+          <div class="scanner-reticle-overlay">
+            <span class="scanner-corner top-left"></span>
+            <span class="scanner-corner top-right"></span>
+            <span class="scanner-corner bottom-left"></span>
+            <span class="scanner-corner bottom-right"></span>
+          </div>
+          <div class="scanner-laser-line"></div>
+
+          <!-- Real-Time Feedback Badge -->
+          <div id="scannerFeedback" class="scanner-feedback-badge">
+            Align barcode inside green brackets
+          </div>
+        </div>
+
+        <div class="scanner-controls-bar">
+          <div style="display:flex; align-items:center; gap:8px; flex:1;">
+            <select id="selCameraDevice" class="form-control form-control-sm" style="background:#0f172a; color:#fff; border-color:#334155; font-size:0.75rem; max-width:200px;" onchange="window.switchCamera(this.value)">
+              <option value="">Auto-Detecting Camera...</option>
+            </select>
+            <button type="button" class="btn btn-sm btn-secondary" id="btnToggleTorch" onclick="window.toggleTorch()" title="Toggle Flashlight / Torch" style="padding:4px 8px;">
+              🔦 Torch
+            </button>
+          </div>
+          <button type="button" class="btn btn-sm btn-primary" onclick="window.closeCameraScanner()">
+            Done Scanning
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
   <script src="saas-app.js?v=2.9"></script>
 </body>
 </html>
