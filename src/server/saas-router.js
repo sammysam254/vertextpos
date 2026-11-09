@@ -513,7 +513,7 @@ class SaasRouter {
       }
 
       // 13. Public Mobile Online Digital Receipt Viewer (Scanned from Receipt QR Code)
-      if ((pathname.match(/^\/receipt\/([^/]+)$/) || pathname.match(/^\/api\/receipt\/view\/([^/]+)$/)) && req.method === 'GET') {
+      if ((pathname.match(/^\/receipt\/([^/]+)$/) || pathname.match(/^\/api\/receipt\/(?:view\/)?([^/]+)$/)) && req.method === 'GET') {
         const saleId = pathname.split('/').pop();
         const sale = SaasPosService.getSaleById(null, saleId);
         if (!sale) {
