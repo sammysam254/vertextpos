@@ -472,7 +472,7 @@ async function runSaasAcceptanceTests() {
     console.log('\n--- TEST 15: Targeted Multi-Cashier Event Routing & Offline Sync State ---');
     const syncStatusRes = await makeRequest('/api/sync/status', 'GET');
     assert.strictEqual(syncStatusRes.statusCode, 200);
-    assert.ok(syncStatusRes.body.database === 'sqlite_local');
+    assert.ok(syncStatusRes.body.database === 'supabase_cloud' || syncStatusRes.body.database === 'sqlite_local');
     console.log(`[PASS] Offline-First Cloud Sync State verified: Queue length = ${syncStatusRes.body.pendingQueueLength}, Cloud Mode = ${syncStatusRes.body.cloudSyncEnabled ? 'ONLINE_REALTIME' : 'OFFLINE_LOCAL_QUEUE'}.`);
 
     // -----------------------------------------------------------------

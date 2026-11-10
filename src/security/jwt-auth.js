@@ -1,5 +1,4 @@
 const crypto = require('crypto');
-const db = require('../db/sqlite-store');
 const sdb = require('../db/supabase-db');
 const CryptoUtils = require('./crypto-utils');
 const config = require('../config');
@@ -347,74 +346,60 @@ class JwtAuth {
             is_active: true
           }, 'email');
         }
+        // Clone initial product catalog directly in Supabase for the new tenant
+        if (supabaseTenantUuid) {
+          try {
+            const { data: existingProds } = await sdb.query('products', { tenant_id: supabaseTenantUuid });
+            const existingCount = existingProds ? existingProds.length : 0;
+            if (existingCount < 12) {
+              const { data: sampleProds } = await sdb.query('products', {}, { limit: 30 });
+              const seenBarcodes = new Set((existingProds || []).map(p => p.barcode));
+              if (sampleProds && sampleProds.length > 0) {
+                for (const sp of sampleProds) {
+                  if (seenBarcodes.has(sp.barcode)) continue;
+                  seenBarcodes.add(sp.barcode);
+                  const { data: createdProd } = await sdb.insert('products', {
+                    tenant_id: supabaseTenantUuid,
+                    name: sp.name,
+                    barcode: sp.barcode,
+                    sku: `${cleanSlug.toUpperCase()}-${sp.sku}`,
+                    category: sp.category,
+                    unit: sp.unit,
+                    cost_price_kes: sp.cost_price_kes,
+                    selling_price_kes: sp.selling_price_kes,
+                    wholesale_price_kes: sp.wholesale_price_kes,
+                    vat_rate: sp.vat_rate,
+                    min_stock: sp.min_stock,
+                    is_active: true
+                  });
+                  if (createdProd && createdProd.length > 0 && supabaseBranchUuid) {
+                    await sdb.insert('inventory', {
+                      tenant_id: supabaseTenantUuid,
+                      branch_id: supabaseBranchUuid,
+                      product_id: createdProd[0].id,
+                      quantity: 50,
+                      reorder_level: sp.min_stock || 10
+                    });
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('[SUPABASE] Product catalog clone notice:', e.message);
+          }
+        }
       } catch (err) {
         console.warn(`[SUPABASE CLOUD] PostgREST insert notice: ${err.message}`);
       }
     }
 
-    // 3. Local SQLite Store
-    const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
-    const trialEnds = new Date(Date.now() + 14 * 86400000).toISOString();
-
-    db.transaction(() => {
-      // Insert tenant slug ID
-      db.run(
-        `INSERT OR REPLACE INTO tenants (id, name, slug, trade_name, kra_pin, phone, email, currency, plan_id, status, trial_ends_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'KES', ?, 'TRIAL', ?)`,
-        [tenantId, businessName, cleanSlug, tradeName || businessName, kraPin || 'P050000000Z', phone || '254700000000', normalizedEmail, planId, trialEnds]
-      );
-
-      // If Supabase created a UUID, also insert UUID alias into tenants so UUID lookups succeed
-      if (supabaseTenantUuid && supabaseTenantUuid !== tenantId) {
-        db.run(
-          `INSERT OR IGNORE INTO tenants (id, name, slug, trade_name, kra_pin, phone, email, currency, plan_id, status, trial_ends_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'KES', ?, 'TRIAL', ?)`,
-          [supabaseTenantUuid, businessName, cleanSlug, tradeName || businessName, kraPin || 'P050000000Z', phone || '254700000000', normalizedEmail, planId, trialEnds]
-        );
-      }
-
-      db.run(
-        `INSERT OR REPLACE INTO branches (id, tenant_id, code, name, location, phone, status)
-         VALUES (?, ?, 'MAIN', ?, ?, ?, 'ACTIVE')`,
-        [branchId, tenantId, branchName, location, phone]
-      );
-
-      db.run(
-        `INSERT OR REPLACE INTO registers (id, tenant_id, branch_id, code, name, printer_type, status)
-         VALUES (?, ?, ?, 'TILL-01', 'Counter 1 (Express)', 'ESC_POS_80MM', 'ONLINE')`,
-        [registerId, tenantId, branchId]
-      );
-
-      db.run(
-        `INSERT OR REPLACE INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'owner', 'ALL', ?, '1234', 1)`,
-        [finalUserId, supabaseTenantUuid || tenantId, normalizedEmail.split('@')[0], normalizedEmail, hash, salt, fullName || `${businessName} Owner`, phone, JSON.stringify(['ALL_BUSINESS_CONTROL'])]
-      );
-
-      // Clone catalog
-      const standardProducts = db.queryAll('SELECT * FROM products WHERE tenant_id = ? LIMIT 12', ['tenant_metromart']);
-      const insertProd = db.prepare(`
-        INSERT OR IGNORE INTO products (id, tenant_id, name, barcode, sku, category, unit, cost_price_kes, selling_price_kes, wholesale_price_kes, vat_rate, min_stock, is_weighed, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      const insertInv = db.prepare(`
-        INSERT OR IGNORE INTO inventory (id, tenant_id, branch_id, product_id, quantity, reorder_level)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `);
-
-      standardProducts.forEach((p, idx) => {
-        const newProdId = `PRD-${tenantId.replace(/[^a-zA-Z0-9]/g, '')}-${String(idx + 1).padStart(3, '0')}`;
-        insertProd.run(newProdId, tenantId, p.name, p.barcode, `${cleanSlug.toUpperCase()}-${p.sku}`, p.category, p.unit, p.cost_price_kes, p.selling_price_kes, p.wholesale_price_kes, p.vat_rate, p.min_stock, p.is_weighed, 1);
-        insertInv.run(`INV-${newProdId}`, tenantId, branchId, newProdId, 50, p.min_stock);
-      });
-    });
-
+    const effectiveTenantId = supabaseTenantUuid || cleanSlug;
     const token = this.signToken({
       userId: finalUserId,
-      tenantId,
+      tenantId: effectiveTenantId,
       email: normalizedEmail,
       role: 'owner',
-      branchId,
+      branchId: supabaseBranchUuid || 'BR-001',
       name: fullName || `${businessName} Owner`
     });
 
@@ -422,13 +407,13 @@ class JwtAuth {
       success: true,
       requiresConfirmation: isRemote && !authSession,
       tenant: {
-        id: tenantId,
+        id: effectiveTenantId,
         name: businessName,
         slug: cleanSlug,
         currency: 'KES',
         planId,
-        branchId,
-        registerId
+        branchId: supabaseBranchUuid || 'BR-001',
+        registerId: supabaseRegisterUuid || 'TILL-01'
       },
       token: (authSession || !isRemote) ? token : null,
       user: {
@@ -436,8 +421,8 @@ class JwtAuth {
         email: normalizedEmail,
         fullName: fullName || `${businessName} Owner`,
         role: 'owner',
-        tenantId,
-        branchId
+        tenantId: effectiveTenantId,
+        branchId: supabaseBranchUuid || 'BR-001'
       },
       message: (isRemote && !authSession)
         ? "Account created directly in Supabase! If 'Confirm email' is enabled in your Supabase project, click the link sent to your email (or click 'Confirm user' in Supabase Dashboard) to sign in."
@@ -463,17 +448,38 @@ class JwtAuth {
     const isRemote = !!(supabaseUrl && supabaseKey);
 
     if (isSuperAdminEmail) {
-      let finalUserId = 'usr_super_sammy';
-      let authSession = null;
+      let finalUserId = null;
 
       if (isRemote) {
+        const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
         try {
-          const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-          let authRes, authData;
-
           if (serviceKey) {
-            try {
-              authRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+            const listRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+              headers: { 'apikey': serviceKey, 'Authorization': `Bearer ${serviceKey}` }
+            });
+            const listData = await listRes.json();
+            const gt = (listData.users || []).find(u => u.email === normalizedEmail);
+
+            if (gt) {
+              finalUserId = gt.id;
+              await fetch(`${supabaseUrl}/auth/v1/admin/users/${gt.id}`, {
+                method: 'PUT',
+                headers: {
+                  'apikey': serviceKey,
+                  'Authorization': `Bearer ${serviceKey}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  password,
+                  email_confirm: true,
+                  user_metadata: {
+                    full_name: fullName || 'Sammy Seth (Super Admin)',
+                    role: 'super_admin'
+                  }
+                })
+              });
+            } else {
+              const createRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
                 method: 'POST',
                 headers: {
                   'apikey': serviceKey,
@@ -490,70 +496,53 @@ class JwtAuth {
                   }
                 })
               });
-              authData = await authRes.json();
-            } catch (e) {}
+              const createData = await createRes.json();
+              if (createData && createData.id) finalUserId = createData.id;
+            }
           }
+        } catch (e) {
+          console.warn('[SUPABASE AUTH] super_admin sync notice:', e.message);
+        }
 
-          if (!authData || (!authData.id && !authData.user)) {
-            authRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
-              method: 'POST',
-              headers: {
-                'apikey': supabaseKey,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                email: normalizedEmail,
-                password,
-                data: {
-                  full_name: fullName || 'Sammy Seth (Super Admin)',
-                  role: 'super_admin'
-                }
-              })
-            });
-            authData = await authRes.json();
+        // Also ensure user in Supabase public.users table via sdb
+        const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
+        const { data: upUsers } = await sdb.upsert('users', {
+          id: finalUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(finalUserId) ? finalUserId : undefined,
+          tenant_id: null,
+          username: 'sammyseth',
+          email: normalizedEmail,
+          password_hash: hash,
+          password_salt: salt,
+          full_name: fullName || 'Sammy Seth (Super Admin)',
+          phone: phone || '254700000000',
+          role: 'super_admin',
+          branch_id: null,
+          permissions: ['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'],
+          is_active: true
+        }, 'email');
+
+        const resolvedId = (upUsers && upUsers.length > 0 && upUsers[0].id) || finalUserId || '0bdb5910-be5c-45de-8f91-55fac0ad8741';
+
+        const token = this.signToken({
+          userId: resolvedId,
+          tenantId: 'GLOBAL',
+          email: normalizedEmail,
+          role: 'super_admin',
+          name: fullName || 'Sammy Seth (Super Admin)'
+        });
+
+        return {
+          success: true,
+          token,
+          user: {
+            id: resolvedId,
+            email: normalizedEmail,
+            fullName: fullName || 'Sammy Seth (Super Admin)',
+            role: 'super_admin',
+            tenantId: 'GLOBAL'
           }
-
-          if (authRes.ok && (authData.id || (authData.user && authData.user.id))) {
-            finalUserId = authData.id || authData.user.id;
-            authSession = authData.session;
-          }
-        } catch (e) {}
-
-        // Push to public.users in Supabase
-        try {
-          await fetch(`${supabaseUrl}/rest/v1/users`, {
-            method: 'POST',
-            headers: {
-              'apikey': supabaseKey,
-              'Authorization': `Bearer ${supabaseKey}`,
-              'Content-Type': 'application/json',
-              'Prefer': 'return=minimal'
-            },
-            body: JSON.stringify({
-              id: finalUserId,
-              tenant_id: 'GLOBAL',
-              username: 'sammyseth',
-              email: normalizedEmail,
-              full_name: fullName || 'Sammy Seth (Super Admin)',
-              phone: phone || '254700000000',
-              role: 'super_admin',
-              branch_id: 'ALL',
-              pin_code: '9999',
-              active: 1
-            })
-          });
-        } catch (e) {}
+        };
       }
-
-      // Local store
-      const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
-      db.run(
-        `INSERT OR REPLACE INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
-         VALUES (?, 'GLOBAL', 'sammyseth', ?, ?, ?, ?, ?, 'super_admin', 'ALL', ?, '9999', 1)`,
-        [finalUserId, normalizedEmail, hash, salt, fullName || 'Sammy Seth (Super Admin)', phone || '254700000000', JSON.stringify(['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'])]
-      );
-
-      return await this.login(normalizedEmail, password);
     }
 
     // 2. Regular registration as Business Owner
@@ -695,12 +684,9 @@ class JwtAuth {
                   }
                 } catch (e) {}
               }
-              // Also check SQLite pin_code
-              if (!matched) {
-                const localUser = db.queryOne('SELECT pin_code FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?', [r.email.toLowerCase(), (r.username || '').toLowerCase()]);
-                if (localUser && String(localUser.pin_code) === cleanPassword) {
-                  matched = true;
-                }
+              // Also check PIN if stored on user record
+              if (!matched && r.pin_code && String(r.pin_code) === cleanPassword) {
+                matched = true;
               }
             }
 
@@ -747,30 +733,7 @@ class JwtAuth {
       };
     }
 
-    // 3. TERTIARY: Check local store (local resilience fallback for offline mode, seeded accounts, and local PINs)
-    if (!authenticatedUser) {
-      const localUser = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?', [cleanInput, cleanInput]);
-      if (localUser && localUser.active) {
-        let matched = localUser.password_hash && localUser.password_salt && CryptoUtils.verifyEmergencyPassword(cleanPassword, localUser.password_hash, localUser.password_salt);
-        if (!matched && cleanPassword.length === 4 && /^\d{4}$/.test(cleanPassword) && localUser.pin_code) {
-          matched = String(localUser.pin_code) === cleanPassword;
-        }
-        if (matched) {
-          authenticatedUser = {
-            id: localUser.id,
-            email: localUser.email,
-            username: localUser.username,
-            full_name: localUser.full_name,
-            role: localUser.role,
-            tenant_id: localUser.tenant_id,
-            branch_id: localUser.branch_id,
-            permissions: localUser.permissions_json ? JSON.parse(localUser.permissions_json) : []
-          };
-        }
-      }
-    }
-
-    // Strict validation: Reject if password did not match Supabase or local store
+    // Strict validation: Reject if credentials did not match Supabase Auth or Supabase database
     if (!authenticatedUser) {
       return {
         success: false,
@@ -779,20 +742,13 @@ class JwtAuth {
       };
     }
 
-    // Lookup tenant (Check SQLite, with fallback to Supabase if tenant exists in cloud)
+    // Lookup tenant strictly from Supabase Cloud
     const tenantId = authenticatedUser.tenant_id || 'GLOBAL';
-    let tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [tenantId]);
-    if (!tenant && isRemote && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenantId)) {
+    let tenant = null;
+    if (tenantId && tenantId !== 'GLOBAL') {
       try {
-        const { data: tRows } = await sdb.query('tenants', { id: tenantId });
-        if (tRows && tRows.length > 0) {
-          tenant = tRows[0];
-          db.run(
-            `INSERT OR IGNORE INTO tenants (id, name, slug, trade_name, kra_pin, phone, email, currency, plan_id, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [tenant.id, tenant.legal_name || tenant.name || 'Store', tenant.slug || 'store', tenant.trade_name || tenant.name || 'Store', tenant.kra_pin || 'P050000000Z', tenant.business_phone || '', tenant.business_email || '', tenant.currency || 'KES', tenant.plan_tier || 'enterprise', tenant.subscription_status || 'ACTIVE']
-          );
-        }
+        const { data: tRow } = await sdb.queryOne('tenants', { id: tenantId });
+        if (tRow) tenant = tRow;
       } catch (e) {}
     }
 

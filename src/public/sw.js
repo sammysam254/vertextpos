@@ -38,7 +38,7 @@ self.addEventListener('fetch', (event) => {
   if (requestUrl.pathname.startsWith('/api/') || requestUrl.pathname.startsWith('/receipt/')) {
     event.respondWith(
       fetch(event.request).catch(() => {
-        return new Response(JSON.stringify({ error: 'OFFLINE', message: 'You are currently offline. Local POS transactions continue queueing in SQLite.' }), {
+        return new Response(JSON.stringify({ error: 'OFFLINE', message: 'You are currently offline. Please check your internet connection to reach Supabase Cloud.' }), {
           headers: { 'Content-Type': 'application/json' }
         });
       })

@@ -1,15 +1,13 @@
 require('../load-env');
-const db = require('./sqlite-store');
 
 /**
  * VERTEXT POS - Supabase PostgREST Direct Cloud Access Layer
  * 
  * Provides direct PostgREST cloud operations against Supabase PostgreSQL.
+ * SQLite has been completely decommissioned. Supabase is strictly used alone.
+ * 
  * Automatically translates slugs/codes (e.g. 'tenant_metromart', 'BR-001', 'REG-01')
  * to Supabase PostgreSQL UUIDs to guarantee type safety (zero 22P02 errors).
- * 
- * When running in Netlify or online cloud, operations execute live against Supabase.
- * In sandboxed or offline test environments (ENOTFOUND), falls back seamlessly to SQLite.
  */
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
@@ -35,13 +33,12 @@ function isUuid(str) {
  * Resolves a tenant slug, ID or string into a Supabase PostgreSQL UUID.
  */
 async function resolveTenantUuid(slugOrId) {
-  if (!slugOrId) return null;
+  if (!slugOrId || slugOrId === 'GLOBAL') return null;
   if (isUuid(slugOrId)) return slugOrId;
   if (uuidCache.has(`tenant:${slugOrId}`)) return uuidCache.get(`tenant:${slugOrId}`);
 
   const cleanSlug = slugOrId.replace(/^tenant_/, '').toLowerCase();
 
-  // Query Supabase directly
   try {
     const { data, error } = await sbFetch(`tenants?slug=eq.${encodeURIComponent(cleanSlug)}&limit=1`, { method: 'GET' });
     if (!error && Array.isArray(data) && data.length > 0 && isUuid(data[0].id)) {
@@ -49,14 +46,16 @@ async function resolveTenantUuid(slugOrId) {
       return data[0].id;
     }
 
-    // Also try by legal_name
-    const { data: byName, error: nameErr } = await sbFetch(`tenants?or=(slug.ilike.*${encodeURIComponent(cleanSlug)}*,legal_name.ilike.*${encodeURIComponent(cleanSlug)}*)&limit=1`, { method: 'GET' });
+    const { data: byName, error: nameErr } = await sbFetch(
+      `tenants?or=(slug.ilike.*${encodeURIComponent(cleanSlug)}*,legal_name.ilike.*${encodeURIComponent(cleanSlug)}*)&limit=1`,
+      { method: 'GET' }
+    );
     if (!nameErr && Array.isArray(byName) && byName.length > 0 && isUuid(byName[0].id)) {
       uuidCache.set(`tenant:${slugOrId}`, byName[0].id);
       return byName[0].id;
     }
   } catch (e) {
-    // offline
+    console.warn(`[SUPABASE CLOUD] resolveTenantUuid notice: ${e.message}`);
   }
 
   return null;
@@ -66,22 +65,21 @@ async function resolveTenantUuid(slugOrId) {
  * Resolves a branch code or string to Supabase UUID.
  */
 async function resolveBranchUuid(tenantUuid, branchCodeOrId) {
-  if (!branchCodeOrId) return null;
+  if (!branchCodeOrId || branchCodeOrId === 'ALL') return null;
   if (isUuid(branchCodeOrId)) return branchCodeOrId;
   const cacheKey = `branch:${tenantUuid}:${branchCodeOrId}`;
   if (uuidCache.has(cacheKey)) return uuidCache.get(cacheKey);
 
   try {
     const filters = { code: branchCodeOrId };
-    if (tenantUuid) filters.tenant_id = tenantUuid;
+    if (tenantUuid && isUuid(tenantUuid)) filters.tenant_id = tenantUuid;
     const { data } = await query('branches', filters);
     if (data && data.length > 0) {
       uuidCache.set(cacheKey, data[0].id);
       return data[0].id;
     }
 
-    // Auto-create branch
-    if (tenantUuid) {
+    if (tenantUuid && isUuid(tenantUuid)) {
       const { data: created } = await insert('branches', {
         tenant_id: tenantUuid,
         code: branchCodeOrId,
@@ -110,14 +108,14 @@ async function resolveRegisterUuid(tenantUuid, branchUuid, registerCodeOrId) {
 
   try {
     const filters = { code: registerCodeOrId };
-    if (tenantUuid) filters.tenant_id = tenantUuid;
+    if (tenantUuid && isUuid(tenantUuid)) filters.tenant_id = tenantUuid;
     const { data } = await query('registers', filters);
     if (data && data.length > 0) {
       uuidCache.set(cacheKey, data[0].id);
       return data[0].id;
     }
 
-    if (tenantUuid && branchUuid) {
+    if (tenantUuid && isUuid(tenantUuid) && branchUuid && isUuid(branchUuid)) {
       const { data: created } = await insert('registers', {
         tenant_id: tenantUuid,
         branch_id: branchUuid,
@@ -151,6 +149,29 @@ async function resolveUserUuid(userIdOrEmail) {
       uuidCache.set(cacheKey, data[0].id);
       return data[0].id;
     }
+
+    const clean = userIdOrEmail.replace(/^usr_/, '').replace(/_[0-9]+$/, '');
+    const { data: byClean } = await query('users', null, {
+      orFilters: `username.ilike.*${encodeURIComponent(clean)}*,email.ilike.*${encodeURIComponent(clean)}*,role.ilike.*${encodeURIComponent(clean)}*`
+    });
+    if (byClean && byClean.length > 0) {
+      uuidCache.set(cacheKey, byClean[0].id);
+      return byClean[0].id;
+    }
+
+    // Fallback: pick the first cashier in users table
+    const { data: anyCashier } = await query('users', { role: 'cashier' }, { limit: 1 });
+    if (anyCashier && anyCashier.length > 0) {
+      uuidCache.set(cacheKey, anyCashier[0].id);
+      return anyCashier[0].id;
+    }
+
+    // Fallback: pick any user in users table
+    const { data: anyUser } = await query('users', {}, { limit: 1 });
+    if (anyUser && anyUser.length > 0) {
+      uuidCache.set(cacheKey, anyUser[0].id);
+      return anyUser[0].id;
+    }
   } catch (e) {}
 
   return null;
@@ -175,6 +196,7 @@ async function sbFetch(path, options = {}) {
     });
 
     let data = null;
+    const contentRange = res.headers.get('content-range');
     try {
       const text = await res.text();
       data = text ? JSON.parse(text) : null;
@@ -187,31 +209,116 @@ async function sbFetch(path, options = {}) {
       return { data: null, error: { message: errMsg, status: res.status, details: data } };
     }
 
-    return { data, error: null };
+    return { data, error: null, contentRange };
   } catch (err) {
-    // Network / offline error (e.g. ENOTFOUND in sandboxed environment)
-    return { data: null, error: { message: err.message, isOffline: true } };
+    return { data: null, error: { message: err.message } };
   }
 }
 
 /**
  * Normalizes filter values (translating tenant_id slugs to UUIDs).
  */
-async function normalizeFilters(filters) {
+async function normalizeFilters(table, filters) {
   if (!filters) return {};
   const normalized = { ...filters };
+
+  if (table === 'tenants') {
+    if (normalized.id && !isUuid(normalized.id)) {
+      const resolved = await resolveTenantUuid(normalized.id);
+      if (resolved) {
+        normalized.id = resolved;
+      } else {
+        const cleanSlug = normalized.id.replace(/^tenant_/, '').toLowerCase();
+        delete normalized.id;
+        normalized.slug = cleanSlug;
+      }
+    }
+    if (normalized.status) {
+      normalized.subscription_status = normalized.status;
+      delete normalized.status;
+    }
+    if (normalized.plan_id) {
+      normalized.plan_tier = normalized.plan_id;
+      delete normalized.plan_id;
+    }
+    return normalized;
+  }
+
   if (normalized.tenant_id && !isUuid(normalized.tenant_id) && normalized.tenant_id !== 'GLOBAL') {
     const uuid = await resolveTenantUuid(normalized.tenant_id);
     if (uuid) normalized.tenant_id = uuid;
   }
+
+  if (table === 'users') {
+    if (normalized.active !== undefined) {
+      normalized.is_active = Boolean(normalized.active);
+      delete normalized.active;
+    }
+  }
+
+  if (table === 'products') {
+    if (normalized.is_active !== undefined) {
+      normalized.is_active = Boolean(normalized.is_active);
+    }
+  }
+
   return normalized;
 }
 
 /**
- * SELECT rows from a table.
+ * Post-processes rows returned from Supabase to provide backward-compatible aliases.
+ */
+function postProcessRows(table, rows) {
+  if (!Array.isArray(rows)) return rows;
+
+  return rows.map(r => {
+    if (!r || typeof r !== 'object') return r;
+    const mapped = { ...r };
+
+    if (table === 'tenants') {
+      mapped.name = mapped.legal_name || mapped.trade_name || mapped.name || 'Store';
+      mapped.phone = mapped.business_phone || mapped.phone || '';
+      mapped.email = mapped.business_email || mapped.email || '';
+      mapped.plan_id = mapped.plan_tier || mapped.plan_id || 'growth';
+      mapped.status = mapped.subscription_status || mapped.status || 'ACTIVE';
+    } else if (table === 'users') {
+      mapped.active = mapped.is_active !== undefined ? (mapped.is_active ? 1 : 0) : 1;
+      mapped.permissions_json = typeof mapped.permissions === 'string'
+        ? mapped.permissions
+        : JSON.stringify(mapped.permissions || []);
+    } else if (table === 'products') {
+      mapped.cost_price_kes = Number(mapped.cost_price_kes || 0);
+      mapped.selling_price_kes = Number(mapped.selling_price_kes || 0);
+      mapped.wholesale_price_kes = Number(mapped.wholesale_price_kes || mapped.selling_price_kes || 0);
+      mapped.vat_rate = Number(mapped.vat_rate !== undefined ? mapped.vat_rate : 16.0);
+      mapped.is_active = mapped.is_active ? 1 : 0;
+    } else if (table === 'sales') {
+      mapped.subtotal_kes = Number(mapped.subtotal_kes || 0);
+      mapped.tax_kes = Number(mapped.tax_kes || 0);
+      mapped.total_kes = Number(mapped.total_kes || 0);
+      mapped.paid_amount_kes = Number(mapped.paid_amount_kes || 0);
+      mapped.balance_due_kes = Number(mapped.balance_due_kes || 0);
+    } else if (table === 'sale_items') {
+      mapped.quantity = Number(mapped.quantity || 0);
+      mapped.unit_price_kes = Number(mapped.unit_price_kes || 0);
+      mapped.discount_kes = Number(mapped.discount_kes || 0);
+      mapped.subtotal_kes = Number(mapped.subtotal_kes || 0);
+      mapped.tax_kes = Number(mapped.tax_kes || 0);
+      mapped.vat_rate = Number(mapped.vat_rate !== undefined ? mapped.vat_rate : 16.0);
+    } else if (table === 'inventory') {
+      mapped.quantity = Number(mapped.quantity || 0);
+      mapped.reorder_level = Number(mapped.reorder_level || 10);
+    }
+
+    return mapped;
+  });
+}
+
+/**
+ * SELECT rows from a table strictly against Supabase Cloud PostgREST.
  */
 async function query(table, filters = {}, options = {}) {
-  const normFilters = await normalizeFilters(filters);
+  const normFilters = await normalizeFilters(table, filters);
   const params = new URLSearchParams();
 
   if (options.select) params.append('select', options.select);
@@ -226,7 +333,11 @@ async function query(table, filters = {}, options = {}) {
     }
   }
 
-  if (options.orFilters) params.append('or', options.orFilters);
+  if (options.orFilters) {
+    const rawOr = String(options.orFilters).trim();
+    const orVal = rawOr.startsWith('(') && rawOr.endsWith(')') ? rawOr : `(${rawOr})`;
+    params.append('or', orVal);
+  }
   if (options.order) params.append('order', options.order);
   if (options.limit) params.append('limit', options.limit);
   if (options.offset) params.append('offset', options.offset);
@@ -234,34 +345,11 @@ async function query(table, filters = {}, options = {}) {
   const qs = params.toString();
   const { data, error } = await sbFetch(`${table}${qs ? '?' + qs : ''}`, { method: 'GET' });
 
-  // If Supabase returned data, return it
   if (!error && Array.isArray(data)) {
-    return { data, error: null };
+    return { data: postProcessRows(table, data), error: null };
   }
 
-  // Graceful offline fallback to SQLite for local sandbox tests
-  if (error && error.isOffline) {
-    try {
-      let sql = `SELECT ${options.select || '*'} FROM ${table}`;
-      const whereParts = [];
-      const whereVals = [];
-
-      for (const [k, v] of Object.entries(filters || {})) {
-        whereParts.push(`${k} = ?`);
-        whereVals.push(v);
-      }
-      if (whereParts.length > 0) sql += ` WHERE ${whereParts.join(' AND ')}`;
-      if (options.order) sql += ` ORDER BY ${options.order.replace('.', ' ')}`;
-      if (options.limit) sql += ` LIMIT ${options.limit}`;
-
-      const localData = db.queryAll(sql, whereVals);
-      return { data: localData || [], error: null };
-    } catch (e) {
-      return { data: [], error: null };
-    }
-  }
-
-  return { data: data || [], error };
+  return { data: [], error };
 }
 
 /**
@@ -273,144 +361,11 @@ async function queryOne(table, filters = {}, options = {}) {
 }
 
 /**
- * INSERT records.
+ * Count rows in table.
  */
-async function insert(table, records) {
-  const recArray = Array.isArray(records) ? records : [records];
-  const prepared = [];
-
-  for (const r of recArray) {
-    const item = { ...r };
-    // Remove non-UUID id if table requires UUID
-    if (item.id && !isUuid(item.id)) {
-      delete item.id;
-    }
-    // Resolve tenant_id to UUID
-    if (item.tenant_id && !isUuid(item.tenant_id) && item.tenant_id !== 'GLOBAL') {
-      const u = await resolveTenantUuid(item.tenant_id);
-      if (u) item.tenant_id = u;
-      else delete item.tenant_id;
-    }
-    // Resolve branch_id to UUID
-    if (item.branch_id && !isUuid(item.branch_id) && item.branch_id !== 'ALL') {
-      const u = await resolveBranchUuid(item.tenant_id, item.branch_id);
-      if (u) item.branch_id = u;
-      else delete item.branch_id;
-    }
-    // Resolve register_id to UUID
-    if (item.register_id && !isUuid(item.register_id)) {
-      const u = await resolveRegisterUuid(item.tenant_id, item.branch_id, item.register_id);
-      if (u) item.register_id = u;
-      else delete item.register_id;
-    }
-    // Resolve cashier_id to UUID
-    if (item.cashier_id && !isUuid(item.cashier_id)) {
-      const u = await resolveUserUuid(item.cashier_id);
-      if (u) item.cashier_id = u;
-      else delete item.cashier_id;
-    }
-    prepared.push(item);
-  }
-
-  const { data, error } = await sbFetch(`${table}`, {
-    method: 'POST',
-    headers: { 'Prefer': 'return=representation' },
-    body: JSON.stringify(prepared.length === 1 ? prepared[0] : prepared)
-  });
-
-  // Offline fallback
-  if (error && error.isOffline) {
-    try {
-      for (const rec of recArray) {
-        const keys = Object.keys(rec);
-        const placeholders = keys.map(() => '?').join(', ');
-        const values = keys.map(k => rec[k]);
-        db.run(`INSERT OR REPLACE INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`, values);
-      }
-      return { data: recArray, error: null };
-    } catch (e) {
-      return { data: recArray, error: null };
-    }
-  }
-
-  const resultData = Array.isArray(data) ? data : (data ? [data] : []);
-  return { data: resultData, error };
-}
-
-/**
- * UPSERT records (Insert or update on conflict).
- */
-async function upsert(table, records, onConflict = 'id') {
-  const recArray = Array.isArray(records) ? records : [records];
-  const prepared = [];
-
-  for (const r of recArray) {
-    const item = { ...r };
-    // Remove non-UUID id if table requires UUID
-    if (item.id && !isUuid(item.id)) {
-      delete item.id;
-    }
-    // Resolve tenant_id to UUID
-    if (item.tenant_id && !isUuid(item.tenant_id) && item.tenant_id !== 'GLOBAL') {
-      const u = await resolveTenantUuid(item.tenant_id);
-      if (u) item.tenant_id = u;
-      else delete item.tenant_id;
-    }
-    // Resolve branch_id to UUID
-    if (item.branch_id && !isUuid(item.branch_id) && item.branch_id !== 'ALL') {
-      const u = await resolveBranchUuid(item.tenant_id, item.branch_id);
-      if (u) item.branch_id = u;
-      else delete item.branch_id;
-    }
-    // Resolve register_id to UUID
-    if (item.register_id && !isUuid(item.register_id)) {
-      const u = await resolveRegisterUuid(item.tenant_id, item.branch_id, item.register_id);
-      if (u) item.register_id = u;
-      else delete item.register_id;
-    }
-    // Resolve cashier_id to UUID
-    if (item.cashier_id && !isUuid(item.cashier_id)) {
-      const u = await resolveUserUuid(item.cashier_id);
-      if (u) item.cashier_id = u;
-      else delete item.cashier_id;
-    }
-    prepared.push(item);
-  }
-
-  const conflictParam = onConflict ? `?on_conflict=${encodeURIComponent(onConflict)}` : '';
-  const { data, error } = await sbFetch(`${table}${conflictParam}`, {
-    method: 'POST',
-    headers: {
-      'Prefer': 'resolution=merge-duplicates,return=representation'
-    },
-    body: JSON.stringify(prepared.length === 1 ? prepared[0] : prepared)
-  });
-
-  // Offline fallback
-  if (error && error.isOffline) {
-    try {
-      for (const rec of recArray) {
-        const keys = Object.keys(rec);
-        const placeholders = keys.map(() => '?').join(', ');
-        const values = keys.map(k => rec[k]);
-        db.run(`INSERT OR REPLACE INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`, values);
-      }
-      return { data: recArray, error: null };
-    } catch (e) {
-      return { data: recArray, error: null };
-    }
-  }
-
-  const resultData = Array.isArray(data) ? data : (data ? [data] : []);
-  return { data: resultData, error };
-}
-
-/**
- * UPDATE records.
- */
-async function update(table, filters, values) {
-  const normFilters = await normalizeFilters(filters);
-  const params = new URLSearchParams();
+async function count(table, filters = {}) {
+  const normFilters = await normalizeFilters(table, filters);
+  const params = new URLSearchParams({ select: 'count' });
 
   for (const [key, val] of Object.entries(normFilters)) {
     if (val === null) {
@@ -423,41 +378,178 @@ async function update(table, filters, values) {
   }
 
   const qs = params.toString();
-  const { data, error } = await sbFetch(`${table}${qs ? '?' + qs : ''}`, {
-    method: 'PATCH',
-    headers: { 'Prefer': 'return=representation' },
-    body: JSON.stringify(values)
+  const { contentRange, error } = await sbFetch(`${table}${qs ? '?' + qs : ''}`, {
+    method: 'GET',
+    headers: { 'Prefer': 'count=exact' }
   });
 
-  // Offline fallback
-  if (error && error.isOffline) {
-    try {
-      const keys = Object.keys(values);
-      const setClauses = keys.map(k => `${k} = ?`).join(', ');
-      const valParams = keys.map(k => values[k]);
-      const whereParts = [];
-      const whereParams = [];
-      for (const [k, v] of Object.entries(filters || {})) {
-        whereParts.push(`${k} = ?`);
-        whereParams.push(v);
-      }
-      let sql = `UPDATE ${table} SET ${setClauses}`;
-      if (whereParts.length > 0) sql += ` WHERE ${whereParts.join(' AND ')}`;
-      db.run(sql, [...valParams, ...whereParams]);
-      return { data: [values], error: null };
-    } catch (e) {
-      return { data: [values], error: null };
+  if (!error && contentRange) {
+    const parts = contentRange.split('/');
+    if (parts.length > 1) {
+      const num = parseInt(parts[1], 10);
+      if (!isNaN(num)) return { count: num, error: null };
     }
   }
-
-  return { data, error };
+  return { count: 0, error };
 }
 
 /**
- * DELETE records.
+ * Normalizes input records for Supabase tables.
+ */
+async function prepareRecords(table, records) {
+  const recArray = Array.isArray(records) ? records : [records];
+  const prepared = [];
+
+  for (const r of recArray) {
+    const item = { ...r };
+
+    // Remove non-UUID id if table requires UUID
+    if (item.id && !isUuid(item.id)) {
+      delete item.id;
+    }
+
+    if (table === 'tenants') {
+      if (item.name && !item.legal_name) item.legal_name = item.name;
+      if (item.name && !item.trade_name) item.trade_name = item.name;
+      if (item.phone && !item.business_phone) item.business_phone = item.phone;
+      if (item.email && !item.business_email) item.business_email = item.email;
+      if (item.plan_id && !item.plan_tier) item.plan_tier = item.plan_id;
+      if (item.status && !item.subscription_status) item.subscription_status = item.status;
+      delete item.name;
+      delete item.phone;
+      delete item.email;
+      delete item.plan_id;
+      delete item.status;
+    }
+
+    if (table === 'users') {
+      if (item.active !== undefined && item.is_active === undefined) {
+        item.is_active = Boolean(item.active);
+        delete item.active;
+      }
+      if (item.permissions_json !== undefined && item.permissions === undefined) {
+        try {
+          item.permissions = typeof item.permissions_json === 'string'
+            ? JSON.parse(item.permissions_json)
+            : item.permissions_json;
+        } catch (e) {
+          item.permissions = [];
+        }
+        delete item.permissions_json;
+      }
+      delete item.pin_code; // Handled in Supabase user_metadata
+    }
+
+    if (table === 'products') {
+      if (item.is_active !== undefined) {
+        item.is_active = Boolean(item.is_active);
+      }
+    }
+
+    // Resolve tenant_id to UUID
+    if (item.tenant_id !== undefined) {
+      if (item.tenant_id === 'GLOBAL' || !item.tenant_id) {
+        item.tenant_id = null;
+      } else if (!isUuid(item.tenant_id)) {
+        const u = await resolveTenantUuid(item.tenant_id);
+        item.tenant_id = u || null;
+      }
+    }
+    // Resolve branch_id to UUID
+    if (item.branch_id && !isUuid(item.branch_id) && item.branch_id !== 'ALL') {
+      const u = await resolveBranchUuid(item.tenant_id, item.branch_id);
+      if (u) item.branch_id = u;
+      else delete item.branch_id;
+    }
+    // Resolve register_id to UUID
+    if (item.register_id && !isUuid(item.register_id)) {
+      const u = await resolveRegisterUuid(item.tenant_id, item.branch_id, item.register_id);
+      if (u) item.register_id = u;
+      else delete item.register_id;
+    }
+    // Resolve cashier_id to UUID
+    if (item.cashier_id && !isUuid(item.cashier_id)) {
+      const u = await resolveUserUuid(item.cashier_id);
+      if (u) item.cashier_id = u;
+      else delete item.cashier_id;
+    }
+
+    prepared.push(item);
+  }
+
+  return prepared;
+}
+
+/**
+ * INSERT records directly and strictly into Supabase Cloud.
+ */
+async function insert(table, records) {
+  const prepared = await prepareRecords(table, records);
+
+  const { data, error } = await sbFetch(`${table}`, {
+    method: 'POST',
+    headers: { 'Prefer': 'return=representation' },
+    body: JSON.stringify(prepared.length === 1 ? prepared[0] : prepared)
+  });
+
+  const resultData = Array.isArray(data) ? data : (data ? [data] : []);
+  return { data: postProcessRows(table, resultData), error };
+}
+
+/**
+ * UPSERT records directly and strictly into Supabase Cloud.
+ */
+async function upsert(table, records, onConflict = 'id') {
+  const prepared = await prepareRecords(table, records);
+  const conflictParam = onConflict ? `?on_conflict=${encodeURIComponent(onConflict)}` : '';
+
+  const { data, error } = await sbFetch(`${table}${conflictParam}`, {
+    method: 'POST',
+    headers: {
+      'Prefer': 'resolution=merge-duplicates,return=representation'
+    },
+    body: JSON.stringify(prepared.length === 1 ? prepared[0] : prepared)
+  });
+
+  const resultData = Array.isArray(data) ? data : (data ? [data] : []);
+  return { data: postProcessRows(table, resultData), error };
+}
+
+/**
+ * UPDATE records directly and strictly into Supabase Cloud.
+ */
+async function update(table, filters, values) {
+  const normFilters = await normalizeFilters(table, filters);
+  const params = new URLSearchParams();
+
+  for (const [key, val] of Object.entries(normFilters)) {
+    if (val === null) {
+      params.append(key, 'is.null');
+    } else if (typeof val === 'object' && val.op) {
+      params.append(key, `${val.op}.${val.value}`);
+    } else {
+      params.append(key, `eq.${val}`);
+    }
+  }
+
+  const [preparedVal] = await prepareRecords(table, [values]);
+
+  const qs = params.toString();
+  const { data, error } = await sbFetch(`${table}${qs ? '?' + qs : ''}`, {
+    method: 'PATCH',
+    headers: { 'Prefer': 'return=representation' },
+    body: JSON.stringify(preparedVal)
+  });
+
+  const resultData = Array.isArray(data) ? data : (data ? [data] : []);
+  return { data: postProcessRows(table, resultData), error };
+}
+
+/**
+ * DELETE records directly and strictly from Supabase Cloud.
  */
 async function remove(table, filters) {
-  const normFilters = await normalizeFilters(filters);
+  const normFilters = await normalizeFilters(table, filters);
   const params = new URLSearchParams();
 
   for (const [key, val] of Object.entries(normFilters)) {
@@ -470,23 +562,6 @@ async function remove(table, filters) {
     headers: { 'Prefer': 'return=representation' }
   });
 
-  if (error && error.isOffline) {
-    try {
-      const whereParts = [];
-      const whereParams = [];
-      for (const [k, v] of Object.entries(filters || {})) {
-        whereParts.push(`${k} = ?`);
-        whereParams.push(v);
-      }
-      let sql = `DELETE FROM ${table}`;
-      if (whereParts.length > 0) sql += ` WHERE ${whereParts.join(' AND ')}`;
-      db.run(sql, whereParams);
-      return { data: true, error: null };
-    } catch (e) {
-      return { data: true, error: null };
-    }
-  }
-
   return { data, error };
 }
 
@@ -497,6 +572,7 @@ function isConfigured() {
 module.exports = {
   query,
   queryOne,
+  count,
   insert,
   upsert,
   update,

@@ -4,7 +4,6 @@ const path = require('path');
 const config = require('../config');
 const SaasRouter = require('./saas-router');
 const ApiRouter = require('./router');
-const { seedSaasData } = require('../db/saas-seed');
 const { seedDatabase, aliceKeys, bobKeys, carolKeys, cashierDaveKeys } = require('../db/seed');
 const biometricAdapter = require('../biometric/biometric-adapter');
 
@@ -28,7 +27,6 @@ function createServer() {
     biometricAdapter.registerDeviceKey('user_s02', bobKeys.privateKey);
     biometricAdapter.registerDeviceKey('user_s03', carolKeys.privateKey);
     biometricAdapter.registerDeviceKey('user_c01', cashierDaveKeys.privateKey);
-    seedSaasData();
   } catch (e) {
     console.error('Seed load error:', e.message);
   }

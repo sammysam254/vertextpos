@@ -1,5 +1,4 @@
 require('../load-env');
-const db = require('../db/sqlite-store');
 const sdb = require('../db/supabase-db');
 const sseHub = require('../server/sse-hub');
 const EscPosService = require('../printing/escpos-service');
@@ -7,8 +6,8 @@ const EtimsService = require('../tax/etims-service');
 
 /**
  * Safaricom Daraja 2.0 M-Pesa Payment Engine.
- * Dual-layer architecture:
- * High-speed local processing + direct Supabase cloud persistence.
+ * 100% strictly operating against Supabase Cloud PostgreSQL.
+ * SQLite decommissioned.
  */
 class MpesaService {
   constructor() {
@@ -50,20 +49,12 @@ class MpesaService {
       return { success: false, error: 'INVALID_PHONE', message: 'Valid Kenyan mobile number required (e.g. 0712345678 or 254712345678).' };
     }
 
-    let sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [saleId]);
-    if (!sale && sdb.isConfigured()) {
-      const { data: cs } = await sdb.queryOne('sales', { id: saleId });
-      if (cs) sale = cs;
-    }
+    const { data: sale } = await sdb.queryOne('sales', { id: saleId });
     if (!sale) {
-      return { success: false, error: 'SALE_NOT_FOUND', message: 'Target sale invoice not found.' };
+      return { success: false, error: 'SALE_NOT_FOUND', message: 'Target sale invoice not found in Supabase.' };
     }
 
-    let tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [tenantId]);
-    if (!tenant && sdb.isConfigured()) {
-      const { data: ct } = await sdb.queryOne('tenants', { id: tenantId });
-      if (ct) tenant = ct;
-    }
+    const { data: tenant } = await sdb.queryOne('tenants', { id: tenantId });
 
     const businessShortcode = (tenant && tenant.mpesa_shortcode) || this.shortcode;
     const businessType = (tenant && tenant.mpesa_type) || 'TILL';
@@ -71,27 +62,17 @@ class MpesaService {
 
     const merchantRequestId = `MR-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
     const checkoutRequestId = `ws_CO_${Date.now()}_${Math.floor(Math.random() * 900000 + 100000)}`;
-    const mpesaTxId = `MPESA-TX-${Date.now()}`;
 
-    // Record pending transaction in local SQLite
-    db.run(
-      `INSERT INTO mpesa_transactions (id, tenant_id, merchant_request_id, checkout_request_id, sale_id, customer_phone, amount_kes, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')`,
-      [mpesaTxId, tenantId, merchantRequestId, checkoutRequestId, saleId, normalizedPhone, Number(amountKes)]
-    );
-
-    // Also push to Supabase Cloud
-    if (sdb.isConfigured()) {
-      sdb.insert('mpesa_transactions', {
-        tenant_id: tenantId,
-        merchant_request_id: merchantRequestId,
-        checkout_request_id: checkoutRequestId,
-        sale_id: sale.id,
-        customer_phone: normalizedPhone,
-        amount_kes: Number(amountKes),
-        status: 'PENDING'
-      }).catch(() => {});
-    }
+    // Record pending transaction strictly in Supabase
+    await sdb.insert('mpesa_transactions', {
+      tenant_id: tenant ? tenant.id : sale.tenant_id,
+      merchant_request_id: merchantRequestId,
+      checkout_request_id: checkoutRequestId,
+      sale_id: sale.id,
+      customer_phone: normalizedPhone,
+      amount_kes: Number(amountKes),
+      status: 'PENDING'
+    });
 
     console.log(`[M-PESA DARAJA] STK Push dispatched to ${normalizedPhone} for KES ${amountKes} via ${businessName} [Till/Shortcode: ${businessShortcode} (${businessType})] (CheckoutReq: ${checkoutRequestId})`);
 
@@ -102,16 +83,13 @@ class MpesaService {
       checkoutRequestId,
       customerPhone: normalizedPhone,
       amountKes: Number(amountKes),
-      businessShortcode,
-      businessType,
-      businessName,
-      message: `M-Pesa prompt sent to ${normalizedPhone} from ${businessName} (${businessShortcode}). Customer prompt displayed on phone.`
+      message: `M-Pesa payment prompt sent to ${normalizedPhone}. Please ask customer to enter M-Pesa PIN.`
     };
   }
 
   async processCallback(callbackPayload) {
     if (!callbackPayload || !callbackPayload.Body || !callbackPayload.Body.stkCallback) {
-      return { success: false, error: 'MALFORMED_CALLBACK', message: 'Invalid callback format' };
+      return { success: false, error: 'INVALID_PAYLOAD', message: 'Malformed Daraja callback structure' };
     }
 
     const stk = callbackPayload.Body.stkCallback;
@@ -119,32 +97,23 @@ class MpesaService {
     const resultCode = stk.ResultCode;
     const resultDesc = stk.ResultDesc;
 
-    // 1. Idempotency Guard: Check if transaction exists
-    let tx = db.queryOne('SELECT * FROM mpesa_transactions WHERE checkout_request_id = ?', [checkoutRequestId]);
-    if (!tx && sdb.isConfigured()) {
-      const { data: ctx } = await sdb.queryOne('mpesa_transactions', { checkout_request_id: checkoutRequestId });
-      if (ctx) tx = ctx;
-    }
-
+    const { data: tx } = await sdb.queryOne('mpesa_transactions', { checkout_request_id: checkoutRequestId });
     if (!tx) {
       console.warn(`[M-PESA DARAJA] Callback received for unknown CheckoutRequestID: ${checkoutRequestId}`);
-      return { success: false, error: 'UNKNOWN_CHECKOUT_ID' };
+      return { success: false, error: 'TX_NOT_FOUND', message: 'No matching transaction for checkout request ID.' };
     }
 
-    if (tx.status === 'COMPLETED' || tx.status === 'FAILED') {
-      console.log(`[M-PESA DARAJA] Duplicate callback ignored for CheckoutRequestID: ${checkoutRequestId}`);
-      let sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [tx.sale_id]);
+    // Idempotency check: Ignore duplicate callback
+    if (tx.status === 'COMPLETED') {
+      console.log(`[M-PESA DARAJA] Idempotent callback ignored for already completed CheckoutRequestID: ${checkoutRequestId}`);
       return {
-        success: tx.status === 'COMPLETED',
-        status: tx.status,
-        saleId: tx.sale_id,
-        mpesaReceipt: tx.mpesa_receipt || (sale ? sale.mpesa_code : null),
-        amount: Number(tx.amount_kes),
+        success: true,
+        status: 'ALREADY_COMPLETED',
+        mpesaReceipt: tx.mpesa_receipt,
         message: 'Duplicate callback ignored idempotently.'
       };
     }
 
-    // 2. Handle Payment Success (ResultCode === 0)
     if (resultCode === 0) {
       let mpesaReceipt = MpesaService.generateMpesaReceiptCode();
       let paidAmount = Number(tx.amount_kes);
@@ -158,87 +127,61 @@ class MpesaService {
         }
       }
 
-      // Execute DB state finalization inside local SQLite transaction
-      db.transaction(() => {
-        // A. Update M-Pesa record
-        db.run(
-          `UPDATE mpesa_transactions
-           SET status = 'COMPLETED', mpesa_receipt = ?, result_code = 0, result_desc = ?, callback_payload = ?, completed_at = ?
-           WHERE checkout_request_id = ?`,
-          [mpesaReceipt, resultDesc, JSON.stringify(callbackPayload), new Date().toISOString(), checkoutRequestId]
-        );
-
-        // B. Mark target Sale as COMPLETED
-        const sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [tx.sale_id]);
-        if (sale) {
-          const newPaidAmount = sale.paid_amount_kes + paidAmount;
-          const newBalanceDue = Math.max(0, sale.total_kes - newPaidAmount);
-
-          db.run(
-            `UPDATE sales
-             SET status = 'COMPLETED', paid_amount_kes = ?, balance_due_kes = ?, payment_method = 'MPESA', mpesa_code = ?
-             WHERE id = ?`,
-            [newPaidAmount, newBalanceDue, mpesaReceipt, sale.id]
-          );
-
-          // C. Record Payment Entry
-          db.run(
-            `INSERT INTO payments (id, tenant_id, sale_id, method, amount_kes, status, reference, mpesa_request_id, mpesa_receipt_code, customer_phone)
-             VALUES (?, ?, ?, 'MPESA', ?, 'SUCCEEDED', ?, ?, ?, ?)`,
-            [`PAY-${Date.now()}`, sale.tenant_id, sale.id, paidAmount, `REF-MPESA-${mpesaReceipt}`, checkoutRequestId, mpesaReceipt, tx.customer_phone]
-          );
-
-          // D. Deduct Inventory Stock Movements
-          const saleItems = db.queryAll('SELECT * FROM sale_items WHERE sale_id = ?', [sale.id]);
-          for (const item of saleItems) {
-            const inv = db.queryOne('SELECT * FROM inventory WHERE tenant_id = ? AND branch_id = ? AND product_id = ?', [sale.tenant_id, sale.branch_id, item.product_id]);
-            const prevQty = inv ? inv.quantity : 0;
-            const newQty = Math.max(0, prevQty - item.quantity);
-
-            db.run(
-              'UPDATE inventory SET quantity = ? WHERE tenant_id = ? AND branch_id = ? AND product_id = ?',
-              [newQty, sale.tenant_id, sale.branch_id, item.product_id]
-            );
-
-            db.run(
-              `INSERT INTO stock_movements (id, tenant_id, branch_id, product_id, movement_type, quantity, balance_after, reference_id, notes, created_by)
-               VALUES (?, ?, ?, ?, 'SALE', ?, ?, ?, 'POS Checkout M-Pesa sale', ?)`,
-              [`MOV-${Date.now()}-${item.id}`, sale.tenant_id, sale.branch_id, item.product_id, -item.quantity, newQty, sale.id, sale.cashier_id]
-            );
-          }
-
-          // E. Record shift M-Pesa total
-          if (sale.shift_id) {
-            db.run(
-              'UPDATE shifts SET mpesa_sales_kes = mpesa_sales_kes + ? WHERE id = ?',
-              [paidAmount, sale.shift_id]
-            );
-          }
-        }
+      // A. Update M-Pesa record in Supabase
+      await sdb.update('mpesa_transactions', { checkout_request_id: checkoutRequestId }, {
+        status: 'COMPLETED',
+        mpesa_receipt: mpesaReceipt,
+        result_code: 0,
+        result_desc: resultDesc,
+        callback_payload: JSON.stringify(callbackPayload),
+        completed_at: new Date().toISOString()
       });
 
-      // Also update Supabase Cloud
-      if (sdb.isConfigured()) {
-        sdb.update('mpesa_transactions', { checkout_request_id: checkoutRequestId }, {
-          status: 'COMPLETED',
-          mpesa_receipt: mpesaReceipt,
-          result_code: 0,
-          result_desc: resultDesc,
-          callback_payload: JSON.stringify(callbackPayload),
-          completed_at: new Date().toISOString()
-        }).catch(() => {});
+      // B. Update Target Sale in Supabase
+      const { data: sale } = await sdb.queryOne('sales', { id: tx.sale_id });
+      if (sale) {
+        const newPaidAmount = Number(sale.paid_amount_kes || 0) + paidAmount;
+        const newBalanceDue = Math.max(0, Number(sale.total_kes || 0) - newPaidAmount);
 
-        sdb.update('sales', { id: tx.sale_id }, {
+        await sdb.update('sales', { id: sale.id }, {
           status: 'COMPLETED',
+          paid_amount_kes: newPaidAmount,
+          balance_due_kes: newBalanceDue,
           payment_method: 'MPESA',
           mpesa_code: mpesaReceipt
-        }).catch(() => {});
+        });
+
+        // C. Deduct Inventory Stock Movements in Supabase
+        const { data: saleItems } = await sdb.query('sale_items', { sale_id: sale.id });
+        for (const item of saleItems || []) {
+          const { data: inv } = await sdb.queryOne('inventory', {
+            tenant_id: sale.tenant_id,
+            branch_id: sale.branch_id,
+            product_id: item.product_id
+          });
+          const prevQty = inv ? Number(inv.quantity) : 0;
+          const newQty = Math.max(0, prevQty - Number(item.quantity));
+
+          if (inv) {
+            await sdb.update('inventory', { id: inv.id }, { quantity: newQty });
+          }
+
+          await sdb.insert('stock_movements', {
+            tenant_id: sale.tenant_id,
+            branch_id: sale.branch_id,
+            product_id: item.product_id,
+            movement_type: 'SALE',
+            quantity: -Number(item.quantity),
+            balance_after: newQty,
+            reference_id: sale.id,
+            notes: 'POS Checkout M-Pesa sale'
+          });
+        }
       }
 
       console.log(`[M-PESA DARAJA] PAYMENT VERIFIED! Receipt: ${mpesaReceipt}, Amount: KES ${paidAmount}`);
 
-      // 3. Load completed sale & business profile to auto-generate branded receipt
-      const sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [tx.sale_id]);
+      // Generate receipt
       let receipt = null;
       let target = {
         tenantId: tx.tenant_id,
@@ -250,23 +193,18 @@ class MpesaService {
         target.registerId = sale.register_id;
         target.cashierId = sale.cashier_id;
 
-        const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [sale.tenant_id]) || {
-          name: 'Vertext POS Supermarket',
-          trade_name: 'Vertext POS',
-          kra_pin: 'P051234567Z'
-        };
-        const branch = db.queryOne('SELECT * FROM branches WHERE id = ?', [sale.branch_id]) || {
-          name: 'Flagship Store',
-          location: 'Nairobi',
-          phone: '254700000000'
-        };
-        const items = db.queryAll('SELECT * FROM sale_items WHERE sale_id = ?', [sale.id]);
+        const { data: tenant } = await sdb.queryOne('tenants', { id: sale.tenant_id });
+        const { data: branch } = await sdb.queryOne('branches', { id: sale.branch_id });
+        const { data: items } = await sdb.query('sale_items', { sale_id: sale.id });
+
+        const tObj = tenant || { name: 'Vertext POS Supermarket', trade_name: 'Vertext POS', kra_pin: 'P051234567Z' };
+        const bObj = branch || { name: 'Flagship Store', location: 'Nairobi', phone: '254700000000' };
 
         const etims = EtimsService.processSaleForEtims({
           saleId: sale.id,
-          tenantKraPin: tenant.kra_pin,
-          tenantTradeName: tenant.trade_name || tenant.name,
-          items,
+          tenantKraPin: tObj.kra_pin,
+          tenantTradeName: tObj.trade_name || tObj.name,
+          items: items || [],
           subtotalKes: sale.subtotal_kes,
           taxKes: sale.tax_kes,
           totalKes: sale.total_kes,
@@ -274,17 +212,17 @@ class MpesaService {
         });
 
         receipt = EscPosService.generateReceipt({
-          tenantName: tenant.name,
-          tradeName: tenant.trade_name || tenant.name,
-          branchName: branch.name,
-          branchLocation: branch.location,
-          branchPhone: branch.phone,
-          kraPin: tenant.kra_pin,
+          tenantName: tObj.name,
+          tradeName: tObj.trade_name || tObj.name,
+          branchName: bObj.name,
+          branchLocation: bObj.location,
+          branchPhone: bObj.phone,
+          kraPin: tObj.kra_pin,
           receiptNumber: `RCP-${sale.id.slice(-6)}`,
           saleId: sale.id,
           cashierName: sale.cashier_id,
           registerCode: sale.register_id,
-          items,
+          items: items || [],
           subtotalKes: sale.subtotal_kes,
           taxKes: sale.tax_kes,
           totalKes: sale.total_kes,
@@ -293,13 +231,12 @@ class MpesaService {
           paymentMethod: 'MPESA',
           mpesaReceipt,
           etimsInfo: etims,
-          logoBase64: tenant ? tenant.logo_base64 : null,
-          receiptHeaderMsg: tenant ? tenant.receipt_header_msg : null,
-          receiptFooterMsg: tenant ? tenant.receipt_footer_msg : null
+          logoBase64: tObj.logo_base64 || null,
+          receiptHeaderMsg: tObj.receipt_header_msg || null,
+          receiptFooterMsg: tObj.receipt_footer_msg || null
         });
       }
 
-      // 4. Targeted SSE routing directly to the specific cashier terminal
       sseHub.notifyPaymentConfirmed(tx.sale_id, mpesaReceipt, paidAmount, tx.customer_phone, target);
       if (receipt) {
         sseHub.notifyAutoPrint(tx.sale_id, receipt.receiptHtml, receipt.rawEscPosBase64, target);
@@ -316,16 +253,17 @@ class MpesaService {
 
     } else {
       // Payment Failed or Cancelled by customer
-      db.run(
-        `UPDATE mpesa_transactions
-         SET status = 'FAILED', result_code = ?, result_desc = ?, callback_payload = ?, completed_at = ?
-         WHERE checkout_request_id = ?`,
-        [resultCode, resultDesc, JSON.stringify(callbackPayload), new Date().toISOString(), checkoutRequestId]
-      );
+      await sdb.update('mpesa_transactions', { checkout_request_id: checkoutRequestId }, {
+        status: 'FAILED',
+        result_code: resultCode,
+        result_desc: resultDesc,
+        callback_payload: JSON.stringify(callbackPayload),
+        completed_at: new Date().toISOString()
+      });
 
       console.warn(`[M-PESA DARAJA] Payment Failed for ${tx.customer_phone}: [Code ${resultCode}] ${resultDesc}`);
 
-      const sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [tx.sale_id]);
+      const { data: sale } = await sdb.queryOne('sales', { id: tx.sale_id });
       const target = {
         tenantId: tx.tenant_id,
         saleId: tx.sale_id,
@@ -352,12 +290,8 @@ class MpesaService {
   }
 
   async simulateCustomerPinConfirmation(checkoutRequestId, { mpesaReceipt = null, willSucceed = true } = {}) {
-    let tx = db.queryOne('SELECT * FROM mpesa_transactions WHERE checkout_request_id = ?', [checkoutRequestId]);
-    if (!tx && sdb.isConfigured()) {
-      const { data: ctx } = await sdb.queryOne('mpesa_transactions', { checkout_request_id: checkoutRequestId });
-      if (ctx) tx = ctx;
-    }
-    if (!tx) return { success: false, message: 'Transaction not found' };
+    const { data: tx } = await sdb.queryOne('mpesa_transactions', { checkout_request_id: checkoutRequestId });
+    if (!tx) return { success: false, message: 'Transaction not found in Supabase' };
 
     const receipt = mpesaReceipt || MpesaService.generateMpesaReceiptCode();
 

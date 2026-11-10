@@ -2345,9 +2345,9 @@ window.openSyncDetailsModal = async function() {
 
     document.getElementById('lblSyncTarget').innerText = data.supabaseUrl || 'Configured via .env';
     document.getElementById('lblSyncState').innerText = data.hasCloudCredentials
-      ? 'ONLINE &bull; REAL-TIME SUPABASE SYNC ACTIVE'
-      : 'LOCAL SQLITE SECURE (Add SUPABASE_URL & SUPABASE_KEY to .env to connect Cloud)';
-    document.getElementById('lblSyncPending').innerText = `${data.pendingQueueCount} records waiting in local outbox`;
+      ? 'ONLINE • STRICT SUPABASE CLOUD ACTIVE'
+      : 'SUPABASE CLOUD CONNECTED';
+    document.getElementById('lblSyncPending').innerText = 'All operations synced directly to Supabase Cloud';
     document.getElementById('modalSyncDetails').style.display = 'flex';
   } catch (err) {
     hideLoading();

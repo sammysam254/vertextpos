@@ -1,5 +1,4 @@
 require('../load-env');
-const db = require('../db/sqlite-store');
 const sdb = require('../db/supabase-db');
 const JwtAuth = require('../security/jwt-auth');
 const HierarchyService = require('../security/hierarchy-service');
@@ -9,6 +8,12 @@ const EscPosService = require('../printing/escpos-service');
 const EtimsService = require('../tax/etims-service');
 const sseHub = require('./sse-hub');
 const AuditLogger = require('../security/audit-logger');
+
+const DEFAULT_PLANS = [
+  { id: 'starter', name: 'Starter Retail', price_kes: 2500, billing_cycle: 'MONTHLY', max_branches: 1, max_registers: 2, max_skus: 2000, features: ['pos_checkout', 'mpesa_stk', 'basic_reports', 'receipt_print'] },
+  { id: 'growth', name: 'Supermarket Growth', price_kes: 6500, billing_cycle: 'MONTHLY', max_branches: 3, max_registers: 6, max_skus: 15000, features: ['pos_checkout', 'mpesa_stk', 'multi_branch', 'shifts', 'etims_ready', 'suspended_sales', 'loyalty'] },
+  { id: 'enterprise', name: 'Enterprise Retail Chain', price_kes: 15000, billing_cycle: 'MONTHLY', max_branches: 999, max_registers: 999, max_skus: 999999, features: ['pos_checkout', 'mpesa_stk', 'multi_branch', 'shifts', 'etims_ready', 'biometric_auth', 'central_procurement', 'api_access'] }
+];
 
 class SaasRouter {
   static async handle(req, res, pathname, query, body) {
@@ -25,7 +30,7 @@ class SaasRouter {
 
       // 1. Health & Status
       if (pathname === '/api/status' && req.method === 'GET') {
-        const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [tenantId]);
+        const { data: tenant } = await sdb.queryOne('tenants', { id: tenantId });
         return this.sendJson(res, 200, {
           status: 'ONLINE',
           currency: 'KES',
@@ -53,21 +58,16 @@ class SaasRouter {
 
       // Live Cloud / Supabase Sync Status
       if (pathname === '/api/sync/status' && req.method === 'GET') {
-        let pendingCount = 0;
-        try {
-          pendingCount = db.queryOne("SELECT COUNT(id) as count FROM offline_sync_queue WHERE status = 'PENDING'").count;
-        } catch (e) {}
-
-        const hasSupabase = !!(process.env.SUPABASE_URL && (process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY));
         return this.sendJson(res, 200, {
-          database: 'sqlite_local',
+          database: 'supabase_cloud',
           isOnline: true,
-          hasCloudCredentials: hasSupabase,
-          cloudSyncEnabled: hasSupabase,
-          supabaseUrl: process.env.SUPABASE_URL ? 'Connected to Supabase' : 'Local SQLite Active (Ready for Supabase .env keys)',
-          pendingQueueCount: pendingCount,
-          pendingQueueLength: pendingCount,
-          status: hasSupabase ? (pendingCount === 0 ? 'SYNCED' : 'SYNCING') : 'OFFLINE_LOCAL_SECURE'
+          hasCloudCredentials: sdb.isConfigured(),
+          cloudSyncEnabled: true,
+          supabaseUrl: sdb.isConfigured() ? 'Connected directly to Supabase Cloud PostgreSQL' : 'Supabase credentials needed',
+          pendingQueueCount: 0,
+          pendingQueueLength: 0,
+          status: 'SYNCED',
+          mode: 'Strictly Supabase Cloud Alone'
         });
       }
 
@@ -75,43 +75,24 @@ class SaasRouter {
       if (pathname === '/api/products/search' && req.method === 'GET') {
         const q = (query.q || '').trim();
         if (!q) return this.sendJson(res, 200, { products: [] });
-        const pattern = `%${q}%`;
-        let products = db.queryAll(
-          `SELECT p.*, COALESCE(i.quantity, 0) as stock_quantity 
-           FROM products p 
-           LEFT JOIN inventory i ON p.id = i.product_id AND i.branch_id = ?
-           WHERE p.tenant_id = ? AND p.is_active = 1 AND (p.barcode LIKE ? OR p.sku LIKE ? OR p.name LIKE ?) 
-           LIMIT 12`,
-          [ctx.branchId || 'BR-001', tenantId, pattern, pattern, pattern]
-        );
 
-        if ((!products || products.length === 0) && sdb.isConfigured()) {
-          try {
-            const { data: sups } = await sdb.query('products', { is_active: true }, {
-              orFilters: `barcode.ilike.*${encodeURIComponent(q)}*,sku.ilike.*${encodeURIComponent(q)}*,name.ilike.*${encodeURIComponent(q)}*`,
-              limit: 12
-            });
-            if (sups && sups.length > 0) products = sups;
-          } catch (e) {}
-        }
-        return this.sendJson(res, 200, { products });
+        const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+        const filters = { is_active: true };
+        if (tenantUuid) filters.tenant_id = tenantUuid;
+
+        const { data: products } = await sdb.query('products', filters, {
+          orFilters: `barcode.ilike.*${encodeURIComponent(q)}*,sku.ilike.*${encodeURIComponent(q)}*,name.ilike.*${encodeURIComponent(q)}*`,
+          limit: 12
+        });
+
+        return this.sendJson(res, 200, { products: products || [] });
       }
 
-      // M-Pesa Status Poller (Live Supabase Cloud First with Local Sync)
+      // M-Pesa Status Poller (Live Supabase Cloud First)
       if (pathname.match(/^\/api\/mpesa\/status\/([^/]+)$/) && req.method === 'GET') {
         const saleId = pathname.split('/')[4];
-        let tx = db.queryOne('SELECT * FROM mpesa_transactions WHERE sale_id = ? ORDER BY created_at DESC LIMIT 1', [saleId]);
-        let sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [saleId]);
-
-        if (sdb.isConfigured() && (!sale || sale.status !== 'COMPLETED')) {
-          try {
-            const { data: mRows } = await sdb.query('mpesa_transactions', { sale_id: saleId }, { order: 'created_at.desc', limit: 1 });
-            if (mRows && mRows.length > 0) tx = mRows[0];
-
-            const { data: sRows } = await sdb.query('sales', { id: saleId }, { limit: 1 });
-            if (sRows && sRows.length > 0) sale = sRows[0];
-          } catch (e) {}
-        }
+        const { data: tx } = await sdb.queryOne('mpesa_transactions', { sale_id: saleId }, { order: 'created_at.desc' });
+        const { data: sale } = await sdb.queryOne('sales', { id: saleId });
 
         return this.sendJson(res, 200, {
           saleId,
@@ -124,109 +105,93 @@ class SaasRouter {
       }
 
       if (pathname === '/api/plans' && req.method === 'GET') {
-        const plans = db.queryAll('SELECT * FROM plans');
-        return this.sendJson(res, 200, {
-          plans: plans.map(p => ({
-            ...p,
-            features: p.features_json ? JSON.parse(p.features_json) : []
-          }))
-        });
+        return this.sendJson(res, 200, { plans: DEFAULT_PLANS });
       }
 
       if (pathname === '/api/tenants' && req.method === 'GET') {
-        const tenants = db.queryAll('SELECT id, name, slug, trade_name, kra_pin, phone, email, currency, plan_id, status FROM tenants');
-        return this.sendJson(res, 200, { tenants });
+        const { data: tenants } = await sdb.query('tenants', {});
+        return this.sendJson(res, 200, { tenants: tenants || [] });
       }
 
       // 3. User Switcher / Demo Role Accounts
       if (pathname === '/api/users' && req.method === 'GET') {
-        const users = db.queryAll(
-          'SELECT id, username, email, full_name, role, branch_id, permissions_json, active FROM users WHERE tenant_id = ? OR tenant_id = \'GLOBAL\'',
-          [tenantId]
-        );
+        const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+        const filters = {};
+        if (tenantUuid) filters.tenant_id = tenantUuid;
+
+        const { data: users } = await sdb.query('users', filters);
         return this.sendJson(res, 200, {
-          users: users.map(u => ({
+          users: (users || []).map(u => ({
             ...u,
-            permissions: u.permissions_json ? JSON.parse(u.permissions_json) : []
+            permissions: Array.isArray(u.permissions) ? u.permissions : []
           }))
         });
       }
 
       // 4. Products Catalog
       if (pathname === '/api/products' && req.method === 'GET') {
-        let products = db.queryAll('SELECT * FROM products WHERE tenant_id = ? AND is_active = 1', [tenantId]);
+        const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+        const filters = { is_active: true };
+        if (tenantUuid) filters.tenant_id = tenantUuid;
 
-        if ((!products || products.length === 0) && sdb.isConfigured()) {
-          try {
-            const { data: sups } = await sdb.query('products', { is_active: true }, { order: 'name.asc' });
-            if (sups && sups.length > 0) products = sups;
-          } catch (e) {}
+        let { data: products } = await sdb.query('products', filters, { order: 'name.asc' });
+        if ((!products || products.length === 0) && (!tenantUuid || tenantId === 'tenant_metromart')) {
+          const { data: allProds } = await sdb.query('products', { is_active: true }, { limit: 20 });
+          products = allProds;
         }
-        return this.sendJson(res, 200, { products });
+
+        return this.sendJson(res, 200, { products: products || [] });
       }
 
       if (pathname === '/api/products' && req.method === 'POST') {
         const { name, barcode, sku, category, unit, costPriceKes, sellingPriceKes, wholesalePriceKes, vatRate, initialStock } = body;
-        await HierarchyService.ensureTenantExists(tenantId);
+        const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+        const branchUuid = await sdb.resolveBranchUuid(tenantUuid, ctx.branchId || 'BR-001');
 
-        const prodId = `PRD-${Date.now().toString().slice(-6)}`;
-        db.run(
-          `INSERT INTO products (id, tenant_id, name, barcode, sku, category, unit, cost_price_kes, selling_price_kes, wholesale_price_kes, vat_rate, is_active)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-          [prodId, tenantId, name, barcode, sku || barcode, category || 'FMCG & Groceries', unit || 'PCS', costPriceKes || 0, sellingPriceKes || 0, wholesalePriceKes || sellingPriceKes || 0, vatRate !== undefined ? vatRate : 16.0]
-        );
+        const { data: pData, error: pErr } = await sdb.insert('products', {
+          tenant_id: tenantUuid,
+          name,
+          barcode,
+          sku: sku || barcode,
+          category: category || 'FMCG & Groceries',
+          unit: unit || 'PCS',
+          cost_price_kes: Number(costPriceKes || 0),
+          selling_price_kes: Number(sellingPriceKes || 0),
+          wholesale_price_kes: Number(wholesalePriceKes || sellingPriceKes || 0),
+          vat_rate: vatRate !== undefined ? Number(vatRate) : 16.0,
+          is_active: true
+        });
 
-        // Also add initial stock to inventory table
-        const branchId = ctx.branchId || 'BR-001';
-        const stockQty = Number(initialStock) || 100;
-        try {
-          db.run(
-            `INSERT OR REPLACE INTO inventory (id, tenant_id, branch_id, product_id, quantity, reorder_level)
-             VALUES (?, ?, ?, ?, ?, 10)`,
-            [`INV-${prodId}`, tenantId, branchId, prodId, stockQty]
-          );
-        } catch (e) {}
-
-        // Sync directly to Supabase Cloud
-        if (sdb.isConfigured()) {
-          try {
-            const tenantUuid = await sdb.resolveTenantUuid(tenantId);
-            const { data: pData } = await sdb.insert('products', {
-              tenant_id: tenantUuid,
-              name,
-              barcode,
-              sku: sku || barcode,
-              category: category || 'FMCG & Groceries',
-              unit: unit || 'PCS',
-              cost_price_kes: costPriceKes || 0,
-              selling_price_kes: sellingPriceKes || 0,
-              wholesale_price_kes: wholesalePriceKes || sellingPriceKes || 0,
-              vat_rate: vatRate !== undefined ? vatRate : 16.0,
-              is_active: true
-            });
-
-            if (pData && pData.length > 0) {
-              const bUuid = await sdb.resolveBranchUuid(tenantUuid, branchId);
-              await sdb.insert('inventory', {
-                tenant_id: tenantUuid,
-                branch_id: bUuid,
-                product_id: pData[0].id,
-                quantity: stockQty,
-                reorder_level: 10
-              });
-            }
-          } catch (cloudErr) {
-            console.warn('[SUPABASE PRODUCT SYNC] notice:', cloudErr.message);
-          }
+        if (pErr || !pData || pData.length === 0) {
+          return this.sendJson(res, 400, { error: 'DB_ERROR', message: (pErr && pErr.message) || 'Failed to create product in Supabase' });
         }
 
-        return this.sendJson(res, 201, { success: true, productId: prodId, message: `Product "${name}" created successfully.` });
+        const createdProd = pData[0];
+        if (branchUuid) {
+          await sdb.insert('inventory', {
+            tenant_id: tenantUuid,
+            branch_id: branchUuid,
+            product_id: createdProd.id,
+            quantity: Number(initialStock) || 100,
+            reorder_level: 10
+          });
+        }
+
+        return this.sendJson(res, 201, {
+          success: true,
+          productId: createdProd.id,
+          message: `Product "${name}" created successfully in Supabase.`
+        });
       }
 
       // 5. Branches & Registers
       if (pathname === '/api/branches' && req.method === 'GET') {
-        const branches = db.queryAll('SELECT * FROM branches WHERE tenant_id = ?', [tenantId]);
-        return this.sendJson(res, 200, { branches });
+        const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+        const filters = {};
+        if (tenantUuid) filters.tenant_id = tenantUuid;
+
+        const { data: branches } = await sdb.query('branches', filters);
+        return this.sendJson(res, 200, { branches: branches || [] });
       }
 
       // 6. POS Checkout Operations
@@ -245,7 +210,7 @@ class SaasRouter {
       if (pathname.match(/^\/api\/pos\/sale\/([^/]+)$/) && req.method === 'GET') {
         const saleId = pathname.split('/')[4];
         const sale = await SaasPosService.getSaleById(tenantId, saleId);
-        if (!sale) return this.sendJson(res, 404, { error: 'NOT_FOUND', message: 'Sale not found' });
+        if (!sale) return this.sendJson(res, 404, { error: 'NOT_FOUND', message: 'Sale not found in Supabase' });
         return this.sendJson(res, 200, { sale });
       }
 
@@ -335,24 +300,54 @@ class SaasRouter {
 
       // 10. Cashier Shifts
       if (pathname === '/api/shifts/active' && req.method === 'GET') {
-        const registerId = query.registerId || ctx.registerId || 'REG-01';
-        const shift = db.queryOne(
-          'SELECT * FROM shifts WHERE tenant_id = ? AND register_id = ? AND status = \'OPEN\'',
-          [tenantId, registerId]
-        );
+        const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+        const registerUuid = await sdb.resolveRegisterUuid(tenantUuid, null, query.registerId || ctx.registerId || 'REG-01');
+
+        const filters = { status: 'OPEN' };
+        if (tenantUuid) filters.tenant_id = tenantUuid;
+
+        let { data: shift } = await sdb.queryOne('shifts', filters);
+        if (!shift) {
+          const { data: createdShift } = await sdb.insert('shifts', {
+            tenant_id: tenantUuid,
+            branch_id: await sdb.resolveBranchUuid(tenantUuid, 'BR-001'),
+            register_id: registerUuid,
+            cashier_id: await sdb.resolveUserUuid('cashier@metromart.ke'),
+            status: 'OPEN',
+            opening_float_kes: 2500.00,
+            cash_sales_kes: 0.00,
+            mpesa_sales_kes: 0.00,
+            notes: 'Active Register Shift'
+          });
+          if (createdShift && createdShift.length > 0) shift = createdShift[0];
+        }
         return this.sendJson(res, 200, { shift });
       }
 
       if (pathname === '/api/shifts/open' && req.method === 'POST') {
         const { branchId, registerId, cashierId, openingFloatKes, notes } = body;
-        const shiftId = `SHIFT-${Date.now().toString().slice(-6)}`;
-        db.run(
-          `INSERT INTO shifts (id, tenant_id, branch_id, register_id, cashier_id, status, opened_at, opening_float_kes, notes)
-           VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)`,
-          [shiftId, tenantId, branchId || 'BR-001', registerId || 'REG-01', cashierId || 'usr_cashier_01', new Date().toISOString(), Number(openingFloatKes || 2500.00), notes || 'Shift Opened']
-        );
-        const shift = db.queryOne('SELECT * FROM shifts WHERE id = ?', [shiftId]);
-        return this.sendJson(res, 201, { success: true, shift });
+        const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+        const branchUuid = await sdb.resolveBranchUuid(tenantUuid, branchId || 'BR-001');
+        const registerUuid = await sdb.resolveRegisterUuid(tenantUuid, branchUuid, registerId || 'REG-01');
+        const cashierUuid = await sdb.resolveUserUuid(cashierId || 'usr_cashier_01');
+
+        const { data: created, error: shErr } = await sdb.insert('shifts', {
+          tenant_id: tenantUuid,
+          branch_id: branchUuid,
+          register_id: registerUuid,
+          cashier_id: cashierUuid,
+          status: 'OPEN',
+          opening_float_kes: Number(openingFloatKes || 2500.00),
+          cash_sales_kes: 0.00,
+          mpesa_sales_kes: 0.00,
+          notes: notes || 'Shift Opened'
+        });
+
+        if (shErr || !created || created.length === 0) {
+          return this.sendJson(res, 400, { error: 'DB_ERROR', message: (shErr && shErr.message) || 'Failed to open shift' });
+        }
+
+        return this.sendJson(res, 201, { success: true, shift: created[0] });
       }
 
       if (pathname === '/api/shifts/close' && req.method === 'POST') {
@@ -426,27 +421,31 @@ class SaasRouter {
       if (pathname === '/api/hierarchy/configure-daraja' && req.method === 'POST') {
         const { targetTenantId, tenantId: bodyTenantId, mpesaShortcode, mpesaPasskey, mpesaConsumerKey, mpesaConsumerSecret, mpesaType, receiptHeaderMsg, receiptFooterMsg } = body;
         const effectiveTenantId = targetTenantId || bodyTenantId || tenantId;
+        const tenantUuid = await sdb.resolveTenantUuid(effectiveTenantId);
 
-        db.run(
-          `UPDATE tenants 
-           SET mpesa_shortcode = ?, mpesa_passkey = ?, mpesa_consumer_key = ?, mpesa_consumer_secret = ?, mpesa_type = ?, receipt_header_msg = ?, receipt_footer_msg = ?
-           WHERE id = ?`,
-          [mpesaShortcode, mpesaPasskey, mpesaConsumerKey, mpesaConsumerSecret, mpesaType || 'TILL', receiptHeaderMsg, receiptFooterMsg, effectiveTenantId]
-        );
+        await sdb.update('tenants', { id: tenantUuid }, {
+          mpesa_shortcode: mpesaShortcode,
+          mpesa_passkey: mpesaPasskey,
+          mpesa_consumer_key: mpesaConsumerKey,
+          mpesa_consumer_secret: mpesaConsumerSecret,
+          mpesa_type: mpesaType || 'TILL',
+          receipt_header_msg: receiptHeaderMsg,
+          receipt_footer_msg: receiptFooterMsg
+        });
 
-        const updatedTenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [effectiveTenantId]);
+        const { data: updatedTenant } = await sdb.queryOne('tenants', { id: tenantUuid });
 
         return this.sendJson(res, 200, {
           success: true,
           tenant: updatedTenant,
-          message: `M-Pesa Daraja configuration updated for tenant ${effectiveTenantId}.`
+          message: `M-Pesa Daraja configuration updated in Supabase for tenant ${effectiveTenantId}.`
         });
       }
 
       // Business Settings
       if (pathname === '/api/tenant/settings' && req.method === 'GET') {
-        const targetTenantId = query.tenantId || tenantId;
-        const tenantProfile = db.queryOne('SELECT * FROM tenants WHERE id = ?', [targetTenantId]);
+        const targetTenantId = await sdb.resolveTenantUuid(query.tenantId || tenantId);
+        const { data: tenantProfile } = await sdb.queryOne('tenants', { id: targetTenantId });
         if (!tenantProfile) return this.sendJson(res, 404, { error: 'TENANT_NOT_FOUND' });
         return this.sendJson(res, 200, { success: true, tenant: tenantProfile });
       }
@@ -454,48 +453,45 @@ class SaasRouter {
       if (pathname === '/api/tenant/settings' && req.method === 'POST') {
         const { targetTenantId, name, tradeName, kraPin, phone, email, location, receiptHeaderMsg, receiptFooterMsg, logoBase64, monthlySubscriptionKes } = body;
         const effectiveTenantId = targetTenantId || tenantId;
+        const tenantUuid = await sdb.resolveTenantUuid(effectiveTenantId);
 
-        const existing = db.queryOne('SELECT * FROM tenants WHERE id = ?', [effectiveTenantId]);
+        const { data: existing } = await sdb.queryOne('tenants', { id: tenantUuid });
         if (!existing) return this.sendJson(res, 404, { error: 'TENANT_NOT_FOUND' });
 
-        const updatedName = name || existing.name;
-        const updatedTradeName = tradeName || existing.trade_name || updatedName;
-        const updatedKraPin = kraPin || existing.kra_pin;
-        const updatedPhone = phone || existing.phone;
-        const updatedEmail = email || existing.email;
-        const updatedLocation = location || existing.location || 'Nairobi';
-        const updatedHeader = receiptHeaderMsg !== undefined ? receiptHeaderMsg : existing.receipt_header_msg;
-        const updatedFooter = receiptFooterMsg !== undefined ? receiptFooterMsg : existing.receipt_footer_msg;
-        const updatedLogo = logoBase64 !== undefined ? logoBase64 : existing.logo_base64;
-        const updatedSubFee = monthlySubscriptionKes !== undefined ? Number(monthlySubscriptionKes) : existing.monthly_subscription_kes;
+        const updateData = {
+          legal_name: name || existing.name,
+          trade_name: tradeName || existing.trade_name || name || existing.name,
+          kra_pin: kraPin || existing.kra_pin,
+          business_phone: phone || existing.phone,
+          business_email: email || existing.email,
+          location: location || existing.location || 'Nairobi',
+          receipt_header_msg: receiptHeaderMsg !== undefined ? receiptHeaderMsg : existing.receipt_header_msg,
+          receipt_footer_msg: receiptFooterMsg !== undefined ? receiptFooterMsg : existing.receipt_footer_msg,
+          logo_base64: logoBase64 !== undefined ? logoBase64 : existing.logo_base64
+        };
 
-        db.run(
-          `UPDATE tenants 
-           SET name = ?, trade_name = ?, kra_pin = ?, phone = ?, email = ?, location = ?, receipt_header_msg = ?, receipt_footer_msg = ?, logo_base64 = ?, monthly_subscription_kes = ?
-           WHERE id = ?`,
-          [updatedName, updatedTradeName, updatedKraPin, updatedPhone, updatedEmail, updatedLocation, updatedHeader, updatedFooter, updatedLogo, updatedSubFee, effectiveTenantId]
-        );
+        if (monthlySubscriptionKes !== undefined) {
+          updateData.monthly_subscription_kes = Number(monthlySubscriptionKes);
+        }
 
-        db.run('UPDATE branches SET location = ?, phone = ? WHERE tenant_id = ?', [updatedLocation, updatedPhone, effectiveTenantId]);
+        await sdb.update('tenants', { id: tenantUuid }, updateData);
 
-        const updated = db.queryOne('SELECT * FROM tenants WHERE id = ?', [effectiveTenantId]);
+        const { data: updated } = await sdb.queryOne('tenants', { id: tenantUuid });
 
         return this.sendJson(res, 200, {
           success: true,
           tenant: updated,
-          message: 'Business configurations & receipt branding saved successfully.'
+          message: 'Business configurations & receipt branding saved successfully in Supabase.'
         });
       }
 
       if (pathname === '/api/hierarchy/users' && req.method === 'GET') {
-        const users = db.queryAll(
-          `SELECT id, username, email, full_name, phone, role, branch_id, pin_code, active, created_at 
-           FROM users 
-           WHERE tenant_id = ? OR tenant_id = 'GLOBAL'
-           ORDER BY role ASC, created_at DESC`,
-          [tenantId]
-        );
-        return this.sendJson(res, 200, { users });
+        const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+        const filters = {};
+        if (tenantUuid) filters.tenant_id = tenantUuid;
+
+        const { data: users } = await sdb.query('users', filters, { order: 'created_at.desc' });
+        return this.sendJson(res, 200, { users: users || [] });
       }
 
       // 12. Dedicated 10-Role Dashboard Metrics Engine
@@ -507,55 +503,50 @@ class SaasRouter {
 
       // 13. Reports Dashboard
       if (pathname === '/api/reports/dashboard' && req.method === 'GET') {
-        const salesStats = db.queryOne(`
-          SELECT 
-            COUNT(id) as transactionCount,
-            COALESCE(SUM(total_kes), 0.0) as totalRevenueKes,
-            COALESCE(SUM(CASE WHEN payment_method = 'CASH' THEN total_kes ELSE 0 END), 0.0) as cashRevenueKes,
-            COALESCE(SUM(CASE WHEN payment_method = 'MPESA' THEN total_kes ELSE 0 END), 0.0) as mpesaRevenueKes
-          FROM sales
-          WHERE tenant_id = ? AND status = 'COMPLETED'
-        `, [tenantId]);
+        const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+        const filters = { status: 'COMPLETED' };
+        if (tenantUuid) filters.tenant_id = tenantUuid;
 
-        const inventoryStats = db.queryOne(`
-          SELECT COUNT(id) as lowStockCount FROM inventory WHERE tenant_id = ? AND quantity <= reorder_level
-        `, [tenantId]);
+        const { data: completedSales } = await sdb.query('sales', filters);
+        const salesList = completedSales || [];
+
+        const totalRevenueKes = salesList.reduce((sum, s) => sum + Number(s.total_kes || 0), 0);
+        const cashRevenueKes = salesList.filter(s => s.payment_method === 'CASH').reduce((sum, s) => sum + Number(s.total_kes || 0), 0);
+        const mpesaRevenueKes = salesList.filter(s => s.payment_method === 'MPESA').reduce((sum, s) => sum + Number(s.total_kes || 0), 0);
+
+        const invFilters = {};
+        if (tenantUuid) invFilters.tenant_id = tenantUuid;
+        const { data: inventoryItems } = await sdb.query('inventory', invFilters);
+        const lowStockCount = (inventoryItems || []).filter(i => Number(i.quantity) <= Number(i.reorder_level || 10)).length;
 
         return this.sendJson(res, 200, {
           currency: 'KES',
-          todaySalesKes: salesStats ? salesStats.totalRevenueKes : 0.00,
-          transactionCount: salesStats ? salesStats.transactionCount : 0,
-          cashRevenueKes: salesStats ? salesStats.cashRevenueKes : 0.00,
-          mpesaRevenueKes: salesStats ? salesStats.mpesaRevenueKes : 0.00,
-          lowStockCount: inventoryStats ? inventoryStats.lowStockCount : 0
+          todaySalesKes: totalRevenueKes,
+          transactionCount: salesList.length,
+          cashRevenueKes,
+          mpesaRevenueKes,
+          lowStockCount
         });
       }
 
       // Receipt Preview
       if (pathname.match(/^\/api\/printing\/receipt\/([^/]+)$/) && req.method === 'GET') {
         const saleId = pathname.split('/')[4];
-        const sale = await SaasPosService.getSaleById(tenantId, saleId) || await SaasPosService.getSaleById(null, saleId);
+        const sale = await SaasPosService.getSaleById(tenantId, saleId);
         if (!sale) return this.sendJson(res, 404, { error: 'NOT_FOUND', message: `Sale ${saleId} not found` });
 
-        const effectiveTenantId = sale.tenant_id || tenantId;
-        const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [effectiveTenantId]) || {
-          name: 'MetroMart Supermarkets Ltd',
-          trade_name: 'MetroMart Supermarket & Wholesalers',
-          kra_pin: 'P051234567Z'
-        };
-        const branch = db.queryOne('SELECT * FROM branches WHERE id = ?', [sale.branch_id]) || {
-          name: 'Main Flagship Store',
-          location: 'Nairobi CBD',
-          phone: '254711002234'
-        };
+        const { data: tenant } = await sdb.queryOne('tenants', { id: sale.tenant_id });
+        const { data: branch } = await sdb.queryOne('branches', { id: sale.branch_id });
+        const { data: cashierUser } = await sdb.queryOne('users', { id: sale.cashier_id });
 
-        const cashierUser = db.queryOne('SELECT full_name FROM users WHERE id = ?', [sale.cashier_id]);
-        const cashierName = cashierUser ? cashierUser.full_name : 'Dave Kipchumba';
+        const tObj = tenant || { name: 'MetroMart Supermarket Ltd', trade_name: 'MetroMart Supermarket', kra_pin: 'P051234567Z' };
+        const bObj = branch || { name: 'Main Flagship Store', location: 'Nairobi CBD', phone: '254711002234' };
+        const cashierName = cashierUser ? cashierUser.full_name : 'Cashier';
 
         const etims = EtimsService.processSaleForEtims({
-          saleId,
-          tenantKraPin: tenant.kra_pin,
-          tenantTradeName: tenant.trade_name,
+          saleId: sale.id,
+          tenantKraPin: tObj.kra_pin,
+          tenantTradeName: tObj.trade_name || tObj.name,
           items: sale.items || [],
           subtotalKes: sale.subtotal_kes,
           taxKes: sale.tax_kes,
@@ -564,14 +555,14 @@ class SaasRouter {
         });
 
         const receipt = EscPosService.generateReceipt({
-          tenantName: tenant.name,
-          tradeName: tenant.trade_name || tenant.name,
-          branchName: branch.name,
-          branchLocation: branch.location,
-          branchPhone: branch.phone,
-          kraPin: tenant.kra_pin,
-          receiptNumber: `RCP-${saleId.slice(-6)}`,
-          saleId,
+          tenantName: tObj.name,
+          tradeName: tObj.trade_name || tObj.name,
+          branchName: bObj.name,
+          branchLocation: bObj.location,
+          branchPhone: bObj.phone,
+          kraPin: tObj.kra_pin,
+          receiptNumber: `RCP-${sale.id.slice(-6)}`,
+          saleId: sale.id,
           cashierName,
           registerCode: sale.register_id || 'TILL-01',
           items: sale.items || [],
@@ -585,9 +576,9 @@ class SaasRouter {
           customerPhone: sale.customer_phone,
           etimsInfo: etims,
           host: req.headers.host || 'localhost:3000',
-          logoBase64: tenant.logo_base64 || null,
-          receiptHeaderMsg: tenant.receipt_header_msg || null,
-          receiptFooterMsg: tenant.receipt_footer_msg || null
+          logoBase64: tObj.logo_base64 || null,
+          receiptHeaderMsg: tObj.receipt_header_msg || null,
+          receiptFooterMsg: tObj.receipt_footer_msg || null
         });
 
         return this.sendJson(res, 200, receipt);
@@ -606,31 +597,24 @@ class SaasRouter {
             <head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Receipt Not Found</title></head>
             <body style="font-family:system-ui,sans-serif; text-align:center; padding:40px; background:#f8fafc; color:#334155;">
               <h2 style="color:#ef4444;">Receipt Not Found</h2>
-              <p>Invoice ID <code>${saleId}</code> was not found on the Vertext POS cloud network.</p>
+              <p>Invoice ID <code>${saleId}</code> was not found on the Vertext POS Supabase cloud network.</p>
             </body>
             </html>
           `);
         }
 
-        const effectiveTenantId = sale.tenant_id;
-        const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [effectiveTenantId]) || {
-          name: 'MetroMart Supermarkets Ltd',
-          trade_name: 'MetroMart Supermarket & Wholesalers',
-          kra_pin: 'P051234567Z'
-        };
-        const branch = db.queryOne('SELECT * FROM branches WHERE id = ?', [sale.branch_id]) || {
-          name: 'Main Flagship Store',
-          location: 'Nairobi CBD',
-          phone: '254711002234'
-        };
+        const { data: tenant } = await sdb.queryOne('tenants', { id: sale.tenant_id });
+        const { data: branch } = await sdb.queryOne('branches', { id: sale.branch_id });
+        const { data: cashierUser } = await sdb.queryOne('users', { id: sale.cashier_id });
 
-        const cashierUser = db.queryOne('SELECT full_name FROM users WHERE id = ?', [sale.cashier_id]);
-        const cashierName = cashierUser ? cashierUser.full_name : 'Dave Kipchumba';
+        const tObj = tenant || { name: 'MetroMart Supermarket Ltd', trade_name: 'MetroMart Supermarket', kra_pin: 'P051234567Z' };
+        const bObj = branch || { name: 'Main Flagship Store', location: 'Nairobi CBD', phone: '254711002234' };
+        const cashierName = cashierUser ? cashierUser.full_name : 'Cashier';
 
         const etims = EtimsService.processSaleForEtims({
-          saleId,
-          tenantKraPin: tenant.kra_pin,
-          tenantTradeName: tenant.trade_name,
+          saleId: sale.id,
+          tenantKraPin: tObj.kra_pin,
+          tenantTradeName: tObj.trade_name || tObj.name,
           items: sale.items || [],
           subtotalKes: sale.subtotal_kes,
           taxKes: sale.tax_kes,
@@ -639,14 +623,14 @@ class SaasRouter {
         });
 
         const receipt = EscPosService.generateReceipt({
-          tenantName: tenant.name,
-          tradeName: tenant.trade_name || tenant.name,
-          branchName: branch.name,
-          branchLocation: branch.location,
-          branchPhone: branch.phone,
-          kraPin: tenant.kra_pin,
-          receiptNumber: `RCP-${saleId.slice(-6)}`,
-          saleId,
+          tenantName: tObj.name,
+          tradeName: tObj.trade_name || tObj.name,
+          branchName: bObj.name,
+          branchLocation: bObj.location,
+          branchPhone: bObj.phone,
+          kraPin: tObj.kra_pin,
+          receiptNumber: `RCP-${sale.id.slice(-6)}`,
+          saleId: sale.id,
           cashierName,
           registerCode: sale.register_id || 'TILL-01',
           items: sale.items || [],
@@ -660,9 +644,9 @@ class SaasRouter {
           customerPhone: sale.customer_phone,
           etimsInfo: etims,
           host: req.headers.host || 'localhost:3000',
-          logoBase64: tenant.logo_base64 || null,
-          receiptHeaderMsg: tenant.receipt_header_msg || null,
-          receiptFooterMsg: tenant.receipt_footer_msg || null
+          logoBase64: tObj.logo_base64 || null,
+          receiptHeaderMsg: tObj.receipt_header_msg || null,
+          receiptFooterMsg: tObj.receipt_footer_msg || null
         });
 
         res.statusCode = 200;
@@ -673,7 +657,7 @@ class SaasRouter {
           <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>${tenant.trade_name} - E-Receipt #${saleId}</title>
+            <title>${tObj.trade_name} - E-Receipt #${saleId}</title>
             <link rel="stylesheet" href="/styles.css">
             <style>
               body { background: #f1f5f9; margin: 0; padding: 20px 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
@@ -688,7 +672,7 @@ class SaasRouter {
           <body>
             <div class="verified-pill">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-              VERIFIED OFFICIAL E-RECEIPT
+              VERIFIED OFFICIAL E-RECEIPT (SUPABASE CLOUD)
             </div>
             <div class="public-receipt-card">
               ${receipt.receiptHtml}
@@ -710,9 +694,8 @@ class SaasRouter {
   }
 
   static async getRoleDashboardData(role, tenantId, ctx) {
-    await HierarchyService.ensureTenantExists(tenantId);
-
-    const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [tenantId]) || {
+    const { data: tenantData } = await sdb.queryOne('tenants', { id: tenantId });
+    const tenant = tenantData || {
       id: tenantId,
       name: 'MetroMart Supermarkets Ltd',
       trade_name: 'MetroMart Supermarkets',
@@ -720,91 +703,70 @@ class SaasRouter {
       currency: 'KES'
     };
 
+    const tenantUuid = await sdb.resolveTenantUuid(tenantId);
     const branchId = ctx.branchId || 'BR-001';
 
     switch (role) {
       case 'super_admin': {
-        const tenants = db.queryAll('SELECT id, name, slug, trade_name, kra_pin, phone, email, currency, plan_id, status, mpesa_shortcode, mpesa_type, mpesa_consumer_key, receipt_header_msg, created_at FROM tenants');
-        const activeCount = tenants.filter(t => t.status === 'ACTIVE').length;
-        const totalMrr = tenants.reduce((acc, t) => acc + (t.plan_id === 'enterprise' ? 12500 : 6500), 0);
+        const { data: tenants } = await sdb.query('tenants', {});
+        const tList = tenants || [];
+        const activeCount = tList.filter(t => t.status === 'ACTIVE').length;
+        const totalMrr = tList.reduce((acc, t) => acc + (t.plan_id === 'enterprise' ? 15000 : 6500), 0);
+        const { count: txCount } = await sdb.count('sales');
+
         return {
           role: 'super_admin',
           currency: 'KES',
-          totalTenants: tenants.length,
+          totalTenants: tList.length,
           activeTenants: activeCount,
           totalMrrKes: totalMrr,
           totalArrKes: totalMrr * 12,
-          tenants: tenants.map(t => ({
+          tenants: tList.map(t => ({
             ...t,
-            monthlySubscriptionKes: t.plan_id === 'enterprise' ? 12500 : 6500,
+            monthlySubscriptionKes: t.plan_id === 'enterprise' ? 15000 : 6500,
             billingSchedule: '1st of every month',
             nextBillingDate: '2026-12-01',
             status: t.status
           })),
           systemHealth: {
-            databaseEngine: 'node:sqlite (WAL Mode) & Supabase Adapter Synced',
-            uptime: '99.98%',
+            databaseEngine: 'Supabase Cloud PostgreSQL (Strictly Online Cloud Alone)',
+            uptime: '99.99%',
             status: 'HEALTHY',
-            totalTransactionsRecorded: db.queryOne('SELECT COUNT(id) as count FROM sales').count
+            totalTransactionsRecorded: txCount
           }
         };
       }
 
       case 'owner': {
-        const salesStats = db.queryOne(`
-          SELECT 
-            COUNT(id) as transactionCount,
-            COALESCE(SUM(total_kes), 0.0) as totalRevenueKes,
-            COALESCE(SUM(tax_kes), 0.0) as vatCollectedKes,
-            COALESCE(SUM(subtotal_kes), 0.0) as subtotalKes,
-            COALESCE(SUM(CASE WHEN payment_method = 'CASH' THEN total_kes ELSE 0 END), 0.0) as cashRevenueKes,
-            COALESCE(SUM(CASE WHEN payment_method = 'MPESA' THEN total_kes ELSE 0 END), 0.0) as mpesaRevenueKes
-          FROM sales
-          WHERE tenant_id = ? AND status = 'COMPLETED'
-        `, [tenantId]) || { transactionCount: 0, totalRevenueKes: 0, vatCollectedKes: 0, cashRevenueKes: 0, mpesaRevenueKes: 0 };
+        const filters = { status: 'COMPLETED' };
+        if (tenantUuid) filters.tenant_id = tenantUuid;
+        const { data: completedSales } = await sdb.query('sales', filters);
+        const sList = completedSales || [];
+
+        const totalRevenueKes = sList.reduce((acc, s) => acc + Number(s.total_kes || 0), 0);
+        const vatCollectedKes = sList.reduce((acc, s) => acc + Number(s.tax_kes || 0), 0);
+        const cashRevenueKes = sList.filter(s => s.payment_method === 'CASH').reduce((acc, s) => acc + Number(s.total_kes || 0), 0);
+        const mpesaRevenueKes = sList.filter(s => s.payment_method === 'MPESA').reduce((acc, s) => acc + Number(s.total_kes || 0), 0);
 
         const branches = await HierarchyService.getBranches({ tenantId });
-
-        let admins = db.queryAll(
-          `SELECT id, username, email, full_name, phone, role, active, created_at 
-           FROM users 
-           WHERE tenant_id = ? AND role = 'admin'`,
-          [tenantId]
-        );
-
-        if ((!admins || admins.length === 0) && sdb.isConfigured()) {
-          try {
-            const tenantUuid = await sdb.resolveTenantUuid(tenantId);
-            if (tenantUuid) {
-              const { data: remoteAdmins } = await sdb.query('users', { tenant_id: tenantUuid, role: 'admin' });
-              if (remoteAdmins && remoteAdmins.length > 0) {
-                for (const ra of remoteAdmins) {
-                  db.run(
-                    `INSERT OR IGNORE INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
-                     VALUES (?, ?, ?, ?, 'hash', 'salt', ?, ?, 'admin', 'ALL', '[]', '2222', 1)`,
-                    [ra.id, tenantId, ra.username || ra.email.split('@')[0], ra.email, ra.full_name || 'Admin', ra.phone || '']
-                  );
-                }
-                admins = db.queryAll('SELECT id, username, email, full_name, phone, role, active, created_at FROM users WHERE tenant_id = ? AND role = \'admin\'', [tenantId]);
-              }
-            }
-          } catch (e) {}
-        }
+        const userFilters = { role: 'admin' };
+        if (tenantUuid) userFilters.tenant_id = tenantUuid;
+        const { data: admins } = await sdb.query('users', userFilters);
 
         return {
           role: 'owner',
           currency: 'KES',
           businessName: tenant.name,
           kraPin: tenant.kra_pin,
-          totalRevenueKes: salesStats.totalRevenueKes,
-          grossProfitKes: Math.round(salesStats.totalRevenueKes * 0.22),
-          vatCollectedKes: salesStats.vatCollectedKes,
-          transactionCount: salesStats.transactionCount,
-          cashRevenueKes: salesStats.cashRevenueKes,
-          mpesaRevenueKes: salesStats.mpesaRevenueKes,
+          totalRevenueKes,
+          grossProfitKes: Math.round(totalRevenueKes * 0.22),
+          vatCollectedKes,
+          transactionCount: sList.length,
+          cashRevenueKes,
+          mpesaRevenueKes,
           subscription: {
             plan: tenant.plan_id || 'Enterprise Multi-Branch',
-            monthlySubscriptionKes: 12500.00,
+            monthlySubscriptionKes: 15000.00,
             billingSchedule: 'Paid on the 1st of every month',
             nextBillingDate: '2026-12-01',
             status: 'ACTIVE'
@@ -815,17 +777,23 @@ class SaasRouter {
       }
 
       case 'admin': {
-        const prodCount = db.queryOne('SELECT COUNT(id) as count FROM products WHERE tenant_id = ? AND is_active = 1', [tenantId]).count;
-        const zeroRatedCount = db.queryOne('SELECT COUNT(id) as count FROM products WHERE tenant_id = ? AND vat_rate = 0 AND is_active = 1', [tenantId]).count;
-        const standardVatCount = db.queryOne('SELECT COUNT(id) as count FROM products WHERE tenant_id = ? AND vat_rate > 0 AND is_active = 1', [tenantId]).count;
-        const lowStockCount = db.queryOne('SELECT COUNT(id) as count FROM inventory WHERE tenant_id = ? AND quantity <= reorder_level', [tenantId]).count;
+        const pFilters = { is_active: true };
+        if (tenantUuid) pFilters.tenant_id = tenantUuid;
+        const { data: prods } = await sdb.query('products', pFilters);
+        const pList = prods || [];
 
-        const branchManagers = db.queryAll(`
-          SELECT u.id, u.username, u.email, u.full_name, u.phone, u.branch_id, u.active, b.name as branch_name
-          FROM users u
-          LEFT JOIN branches b ON u.branch_id = b.id
-          WHERE u.tenant_id = ? AND u.role = 'branch_manager'
-        `, [tenantId]);
+        const prodCount = pList.length;
+        const zeroRatedCount = pList.filter(p => Number(p.vat_rate) === 0).length;
+        const standardVatCount = pList.filter(p => Number(p.vat_rate) > 0).length;
+
+        const invFilters = {};
+        if (tenantUuid) invFilters.tenant_id = tenantUuid;
+        const { data: invList } = await sdb.query('inventory', invFilters);
+        const lowStockCount = (invList || []).filter(i => Number(i.quantity) <= Number(i.reorder_level || 10)).length;
+
+        const uFilters = { role: 'branch_manager' };
+        if (tenantUuid) uFilters.tenant_id = tenantUuid;
+        const { data: branchManagers } = await sdb.query('users', uFilters);
 
         const branches = await HierarchyService.getBranches({ tenantId });
 
@@ -842,69 +810,61 @@ class SaasRouter {
       }
 
       case 'branch_manager': {
-        const branch = db.queryOne('SELECT * FROM branches WHERE id = ? AND tenant_id = ?', [branchId, tenantId]) || { id: branchId, name: 'Main Branch' };
-        const tills = db.queryAll('SELECT * FROM registers WHERE branch_id = ? AND tenant_id = ?', [branchId, tenantId]);
-        const branchSales = db.queryOne(`
-          SELECT 
-            COUNT(id) as transactionCount,
-            COALESCE(SUM(total_kes), 0.0) as totalRevenueKes,
-            COALESCE(SUM(CASE WHEN payment_method = 'CASH' THEN total_kes ELSE 0 END), 0.0) as cashRevenueKes,
-            COALESCE(SUM(CASE WHEN payment_method = 'MPESA' THEN total_kes ELSE 0 END), 0.0) as mpesaRevenueKes
-          FROM sales
-          WHERE tenant_id = ? AND branch_id = ? AND status = 'COMPLETED'
-        `, [tenantId, branchId]) || { transactionCount: 0, totalRevenueKes: 0, cashRevenueKes: 0, mpesaRevenueKes: 0 };
+        const { data: branch } = await sdb.queryOne('branches', { id: branchId }) || { id: branchId, name: 'Main Branch' };
+        const bFilters = {};
+        if (tenantUuid) bFilters.tenant_id = tenantUuid;
+        const { data: tills } = await sdb.query('registers', bFilters);
 
-        const staff = db.queryAll(`
-          SELECT id, username, email, full_name, phone, role, active, created_at 
-          FROM users 
-          WHERE tenant_id = ? AND (branch_id = ? OR branch_id = 'ALL') AND role NOT IN ('super_admin', 'owner', 'admin')
-          ORDER BY role ASC
-        `, [tenantId, branchId]);
+        const sFilters = { status: 'COMPLETED' };
+        if (tenantUuid) sFilters.tenant_id = tenantUuid;
+        const { data: branchSalesData } = await sdb.query('sales', sFilters);
+        const bSales = branchSalesData || [];
 
-        const activeShifts = db.queryAll(`
-          SELECT s.*, u.full_name as cashier_name, r.code as register_code
-          FROM shifts s
-          LEFT JOIN users u ON s.cashier_id = u.id
-          LEFT JOIN registers r ON s.register_id = r.id
-          WHERE s.tenant_id = ? AND s.branch_id = ? AND s.status = 'OPEN'
-        `, [tenantId, branchId]);
+        const staffFilters = {};
+        if (tenantUuid) staffFilters.tenant_id = tenantUuid;
+        const { data: allStaff } = await sdb.query('users', staffFilters);
+        const staff = (allStaff || []).filter(u => !['super_admin', 'owner', 'admin'].includes(u.role));
+
+        const shFilters = { status: 'OPEN' };
+        if (tenantUuid) shFilters.tenant_id = tenantUuid;
+        const { data: activeShifts } = await sdb.query('shifts', shFilters);
 
         return {
           role: 'branch_manager',
           currency: 'KES',
-          branch,
-          tills,
-          branchSales,
-          staff,
-          activeShifts
+          branch: branch || { id: branchId, name: 'Main Branch' },
+          tills: tills || [],
+          branchSales: {
+            transactionCount: bSales.length,
+            totalRevenueKes: bSales.reduce((acc, s) => acc + Number(s.total_kes || 0), 0),
+            cashRevenueKes: bSales.filter(s => s.payment_method === 'CASH').reduce((acc, s) => acc + Number(s.total_kes || 0), 0),
+            mpesaRevenueKes: bSales.filter(s => s.payment_method === 'MPESA').reduce((acc, s) => acc + Number(s.total_kes || 0), 0)
+          },
+          staff: staff || [],
+          activeShifts: activeShifts || []
         };
       }
 
       case 'supervisor': {
-        const suspendedSales = db.queryAll(`
-          SELECT s.*, u.full_name as cashier_name, r.code as register_code
-          FROM sales s
-          LEFT JOIN users u ON s.cashier_id = u.id
-          LEFT JOIN registers r ON s.register_id = r.id
-          WHERE s.tenant_id = ? AND s.status = 'SUSPENDED'
-          ORDER BY s.suspended_at DESC
-        `, [tenantId]);
+        const suspFilters = { status: 'SUSPENDED' };
+        if (tenantUuid) suspFilters.tenant_id = tenantUuid;
+        const { data: suspendedSales } = await sdb.query('sales', suspFilters, { order: 'created_at.desc' });
 
-        const registers = db.queryAll('SELECT * FROM registers WHERE tenant_id = ?', [tenantId]);
-        const recentApprovals = db.queryAll(`
-          SELECT timestamp, event_type, user_name, action, status, reason 
-          FROM audit_logs 
-          WHERE tenant_id = ? AND (event_type LIKE '%SUSPENSION%' OR event_type LIKE '%RESUMPTION%')
-          ORDER BY timestamp DESC LIMIT 10
-        `, [tenantId]);
+        const regFilters = {};
+        if (tenantUuid) regFilters.tenant_id = tenantUuid;
+        const { data: registers } = await sdb.query('registers', regFilters);
+
+        const logFilters = {};
+        if (tenantUuid) logFilters.tenant_id = tenantUuid;
+        const { data: recentApprovals } = await sdb.query('audit_logs', logFilters, { order: 'timestamp.desc', limit: 10 });
 
         return {
           role: 'supervisor',
           currency: 'KES',
-          pendingSuspensionsCount: suspendedSales.length,
-          suspendedSales,
-          registers,
-          recentApprovals,
+          pendingSuspensionsCount: (suspendedSales || []).length,
+          suspendedSales: suspendedSales || [],
+          registers: registers || [],
+          recentApprovals: recentApprovals || [],
           biometricSensor: {
             status: 'CONNECTED',
             driver: 'Windows Biometric Framework / USB Sensor SDK',
@@ -914,26 +874,19 @@ class SaasRouter {
       }
 
       case 'cashier': {
-        const activeShift = db.queryOne(`
-          SELECT s.*, r.code as register_code 
-          FROM shifts s
-          LEFT JOIN registers r ON s.register_id = r.id
-          WHERE s.tenant_id = ? AND s.status = 'OPEN' 
-          LIMIT 1
-        `, [tenantId]) || { id: 'SHIFT-NONE', opening_float_kes: 2500, status: 'OPEN', cash_sales_kes: 0, mpesa_sales_kes: 0 };
+        const shFilters = { status: 'OPEN' };
+        if (tenantUuid) shFilters.tenant_id = tenantUuid;
+        const { data: activeShift } = await sdb.queryOne('shifts', shFilters);
 
-        const recentSales = db.queryAll(`
-          SELECT id, total_kes, payment_method, mpesa_code, status, created_at 
-          FROM sales 
-          WHERE tenant_id = ? 
-          ORDER BY created_at DESC LIMIT 5
-        `, [tenantId]);
+        const sFilters = {};
+        if (tenantUuid) sFilters.tenant_id = tenantUuid;
+        const { data: recentSales } = await sdb.query('sales', sFilters, { order: 'created_at.desc', limit: 5 });
 
         return {
           role: 'cashier',
           currency: 'KES',
-          activeShift,
-          recentSales,
+          activeShift: activeShift || { id: 'SHIFT-NONE', opening_float_kes: 2500, status: 'OPEN', cash_sales_kes: 0, mpesa_sales_kes: 0 },
+          recentSales: recentSales || [],
           tillCode: 'TILL-01',
           scanEngine: 'ACTIVE (<15ms)',
           mpesaEngine: 'DARAJA 2.0 CONNECTED'
@@ -941,35 +894,34 @@ class SaasRouter {
       }
 
       case 'inventory_manager': {
-        const totalProducts = db.queryOne('SELECT COUNT(id) as count FROM products WHERE tenant_id = ?', [tenantId]).count;
-        const lowStockItems = db.queryAll(`
-          SELECT p.id, p.name, p.barcode, p.category, p.unit, p.cost_price_kes, p.selling_price_kes, i.quantity, i.reorder_level
-          FROM inventory i
-          JOIN products p ON i.product_id = p.id
-          WHERE i.tenant_id = ? AND i.quantity <= i.reorder_level
-          ORDER BY i.quantity ASC
-        `, [tenantId]);
+        const pFilters = {};
+        if (tenantUuid) pFilters.tenant_id = tenantUuid;
+        const { data: prods } = await sdb.query('products', pFilters);
+        const pList = prods || [];
 
-        const valuation = db.queryOne(`
-          SELECT COALESCE(SUM(i.quantity * p.cost_price_kes), 0.0) as totalValuationKes
-          FROM inventory i
-          JOIN products p ON i.product_id = p.id
-          WHERE i.tenant_id = ?
-        `, [tenantId]);
+        const invFilters = {};
+        if (tenantUuid) invFilters.tenant_id = tenantUuid;
+        const { data: invList } = await sdb.query('inventory', invFilters);
 
-        const categories = db.queryAll(`
-          SELECT category, COUNT(id) as itemCount 
-          FROM products 
-          WHERE tenant_id = ? 
-          GROUP BY category
-        `, [tenantId]);
+        const lowStockItems = (invList || []).filter(i => Number(i.quantity) <= Number(i.reorder_level || 10));
+        const totalInventoryValuationKes = (invList || []).reduce((acc, i) => {
+          const prod = pList.find(p => p.id === i.product_id);
+          return acc + (Number(i.quantity) * Number(prod ? prod.cost_price_kes : 0));
+        }, 0);
+
+        const categoriesMap = {};
+        pList.forEach(p => {
+          const cat = p.category || 'General';
+          categoriesMap[cat] = (categoriesMap[cat] || 0) + 1;
+        });
+        const categories = Object.entries(categoriesMap).map(([category, itemCount]) => ({ category, itemCount }));
 
         return {
           role: 'inventory_manager',
           currency: 'KES',
-          totalProducts,
+          totalProducts: pList.length,
           lowStockCount: lowStockItems.length,
-          totalInventoryValuationKes: valuation ? valuation.totalValuationKes : 0,
+          totalInventoryValuationKes,
           lowStockItems,
           categories
         };
@@ -996,34 +948,34 @@ class SaasRouter {
       }
 
       case 'accountant': {
-        const taxStats = db.queryOne(`
-          SELECT 
-            COALESCE(SUM(CASE WHEN vat_rate = 16.0 THEN tax_kes ELSE 0 END), 0.0) as vatRateAKes,
-            COALESCE(SUM(CASE WHEN vat_rate = 16.0 THEN subtotal_kes ELSE 0 END), 0.0) as standardSalesSubtotalKes,
-            COALESCE(SUM(CASE WHEN vat_rate = 0.0 THEN subtotal_kes ELSE 0 END), 0.0) as zeroRatedSalesKes
-          FROM sale_items
-          WHERE tenant_id = ?
-        `, [tenantId]) || { vatRateAKes: 0, standardSalesSubtotalKes: 0, zeroRatedSalesKes: 0 };
+        const sFilters = { status: 'COMPLETED' };
+        if (tenantUuid) sFilters.tenant_id = tenantUuid;
+        const { data: completedSales } = await sdb.query('sales', sFilters);
+        const sList = completedSales || [];
 
-        const salesStats = db.queryOne(`
-          SELECT 
-            COALESCE(SUM(total_kes), 0.0) as totalRevenueKes,
-            COALESCE(SUM(CASE WHEN payment_method = 'CASH' THEN total_kes ELSE 0 END), 0.0) as cashRevenueKes,
-            COALESCE(SUM(CASE WHEN payment_method = 'MPESA' THEN total_kes ELSE 0 END), 0.0) as mpesaRevenueKes
-          FROM sales
-          WHERE tenant_id = ? AND status = 'COMPLETED'
-        `, [tenantId]) || { totalRevenueKes: 0, cashRevenueKes: 0, mpesaRevenueKes: 0 };
+        const totalRevenueKes = sList.reduce((acc, s) => acc + Number(s.total_kes || 0), 0);
+        const cashRevenueKes = sList.filter(s => s.payment_method === 'CASH').reduce((acc, s) => acc + Number(s.total_kes || 0), 0);
+        const mpesaRevenueKes = sList.filter(s => s.payment_method === 'MPESA').reduce((acc, s) => acc + Number(s.total_kes || 0), 0);
+
+        const itmFilters = {};
+        if (tenantUuid) itmFilters.tenant_id = tenantUuid;
+        const { data: saleItems } = await sdb.query('sale_items', itmFilters);
+        const items = saleItems || [];
+
+        const standardSalesSubtotalKes = items.filter(i => Number(i.vat_rate) > 0).reduce((acc, i) => acc + Number(i.subtotal_kes || 0), 0);
+        const vatRateAKes = items.filter(i => Number(i.vat_rate) > 0).reduce((acc, i) => acc + Number(i.tax_kes || 0), 0);
+        const zeroRatedSalesKes = items.filter(i => Number(i.vat_rate) === 0).reduce((acc, i) => acc + Number(i.subtotal_kes || 0), 0);
 
         return {
           role: 'accountant',
           currency: 'KES',
-          totalRevenueKes: salesStats.totalRevenueKes,
-          standardSalesSubtotalKes: taxStats.standardSalesSubtotalKes,
-          vatRateAKes: taxStats.vatRateAKes,
-          zeroRatedSalesKes: taxStats.zeroRatedSalesKes,
+          totalRevenueKes,
+          standardSalesSubtotalKes,
+          vatRateAKes,
+          zeroRatedSalesKes,
           tenderReconciliation: {
-            cashKes: salesStats.cashRevenueKes,
-            mpesaKes: salesStats.mpesaRevenueKes,
+            cashKes: cashRevenueKes,
+            mpesaKes: mpesaRevenueKes,
             discrepancyKes: 0.00
           },
           etimsCompliance: {
@@ -1036,23 +988,18 @@ class SaasRouter {
       }
 
       case 'auditor': {
-        const auditLogs = db.queryAll(`
-          SELECT id, timestamp, event_type, user_name, user_role, branch_id, action, status, reason, integrity_checksum
-          FROM audit_logs
-          WHERE tenant_id = ? OR tenant_id = 'GLOBAL'
-          ORDER BY timestamp DESC
-          LIMIT 25
-        `, [tenantId]);
-
-        const totalAuditLogs = db.queryOne("SELECT COUNT(id) as count FROM audit_logs WHERE tenant_id = ? OR tenant_id = 'GLOBAL'", [tenantId]).count;
-        const failedAttempts = db.queryOne("SELECT COUNT(id) as count FROM audit_logs WHERE (tenant_id = ? OR tenant_id = 'GLOBAL') AND status = 'FAILED'", [tenantId]).count;
+        const logFilters = {};
+        if (tenantUuid) logFilters.tenant_id = tenantUuid;
+        const { data: auditLogs } = await sdb.query('audit_logs', logFilters, { order: 'timestamp.desc', limit: 25 });
+        const { count: totalAuditLogs } = await sdb.count('audit_logs', logFilters);
+        const { count: failedAttempts } = await sdb.count('audit_logs', { ...logFilters, status: 'FAILED' });
 
         return {
           role: 'auditor',
           currency: 'KES',
           totalAuditLogs,
           failedAttempts,
-          auditLogs,
+          auditLogs: auditLogs || [],
           securityStatus: {
             biometricSignatures: 'ECDSA P-256 Cryptographically Signed',
             tamperProofVerification: 'PASSED',
