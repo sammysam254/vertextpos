@@ -70,6 +70,16 @@ class HierarchyService {
    * Resolves or ensures a tenant UUID in Supabase database.
    */
   static async getSupabaseTenantUuid(tenantSlugOrId, tenantData = {}) {
+    if (!tenantSlugOrId) return null;
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (UUID_REGEX.test(tenantSlugOrId)) return tenantSlugOrId;
+    if (tenantData && tenantData.id && UUID_REGEX.test(tenantData.id)) return tenantData.id;
+
+    try {
+      const u = await sdb.resolveTenantUuid(tenantSlugOrId);
+      if (u) return u;
+    } catch (e) {}
+
     const supabaseUrl = process.env.SUPABASE_URL || (config && config.supabase && config.supabase.url) || null;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || null;
     const anonKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || (config && config.supabase && config.supabase.anonKey) || null;
@@ -145,9 +155,22 @@ class HierarchyService {
 
     const normalizedEmail = email.trim().toLowerCase();
     const cleanUsername = username || normalizedEmail.split('@')[0];
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     let finalUserId = userId;
 
-    // 1. Direct GoTrue Auth Registration (Auto-confirmed with service key)
+    // Resolve branchId to UUID if valid
+    let branchUuid = null;
+    if (branchId) {
+      if (UUID_REGEX.test(branchId)) {
+        branchUuid = branchId;
+      } else {
+        try {
+          branchUuid = await sdb.resolveBranchUuid(tenantId, branchId);
+        } catch (e) {}
+      }
+    }
+
+    // 1. Direct GoTrue Auth Registration & Password Sync (Auto-confirmed with service key)
     try {
       if (serviceKey) {
         const adminRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
@@ -166,13 +189,49 @@ class HierarchyService {
               role: role,
               phone: phone || '',
               tenant_id: tenantId,
-              branch_id: branchId
+              branch_id: branchUuid || branchId,
+              pin_code: pinCode
             }
           })
         });
         const adminData = await adminRes.json();
         if (adminData && adminData.id) {
           finalUserId = adminData.id;
+        } else if (adminRes.status === 422 || (adminData && (adminData.error_code === 'email_exists' || adminData.code === 422 || (adminData.msg && adminData.msg.toLowerCase().includes('already'))))) {
+          // User already exists in GoTrue: Update their password and user_metadata!
+          try {
+            const listRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+              headers: { 'apikey': serviceKey, 'Authorization': `Bearer ${serviceKey}` }
+            });
+            const list = await listRes.json();
+            const existingUser = (list.users || []).find(u => u.email === normalizedEmail);
+            if (existingUser) {
+              finalUserId = existingUser.id;
+              await fetch(`${supabaseUrl}/auth/v1/admin/users/${existingUser.id}`, {
+                method: 'PUT',
+                headers: {
+                  'apikey': serviceKey,
+                  'Authorization': `Bearer ${serviceKey}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  password: password,
+                  email_confirm: true,
+                  user_metadata: {
+                    full_name: fullName,
+                    role: role,
+                    phone: phone || '',
+                    tenant_id: tenantId,
+                    branch_id: branchUuid || branchId,
+                    pin_code: pinCode
+                  }
+                })
+              });
+              console.log(`[SUPABASE HIERARCHY] Updated existing GoTrue user ${normalizedEmail} with new password and metadata`);
+            }
+          } catch (e) {
+            console.warn('[SUPABASE HIERARCHY] GoTrue existing user update notice:', e.message);
+          }
         }
       } else {
         const authRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
@@ -189,7 +248,8 @@ class HierarchyService {
               role: role,
               phone: phone || '',
               tenant_id: tenantId,
-              branch_id: branchId
+              branch_id: branchUuid || branchId,
+              pin_code: pinCode
             }
           })
         });
@@ -199,34 +259,40 @@ class HierarchyService {
         }
       }
     } catch (authErr) {
-      console.warn(`[SUPABASE HIERARCHY] Auth signup notice: ${authErr.message}`);
+      console.warn(`[SUPABASE HIERARCHY] Auth sync notice: ${authErr.message}`);
     }
 
-    // 2. Direct Supabase Database REST table insertion (public.users)
+    // 2. Direct Supabase Database REST table upsert (public.users)
     try {
       const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
-      await fetch(`${supabaseUrl}/rest/v1/users`, {
+      const userPayload = {
+        tenant_id: tenantId && UUID_REGEX.test(tenantId) ? tenantId : null,
+        username: cleanUsername,
+        email: normalizedEmail,
+        password_hash: hash,
+        password_salt: salt,
+        full_name: fullName,
+        phone: phone || '',
+        role: role,
+        branch_id: branchUuid && UUID_REGEX.test(branchUuid) ? branchUuid : null,
+        permissions: permissions || [],
+        is_active: true
+      };
+      if (finalUserId && UUID_REGEX.test(finalUserId)) {
+        userPayload.id = finalUserId;
+      }
+
+      await fetch(`${supabaseUrl}/rest/v1/users?on_conflict=email`, {
         method: 'POST',
         headers: {
           'apikey': apiKey,
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
-          'Prefer': 'resolution=merge-duplicates'
+          'Prefer': 'resolution=merge-duplicates,return=representation'
         },
-        body: JSON.stringify({
-          tenant_id: tenantId || null,
-          username: cleanUsername,
-          email: normalizedEmail,
-          password_hash: hash,
-          password_salt: salt,
-          full_name: fullName,
-          phone: phone || '',
-          role: role,
-          branch_id: null,
-          permissions: permissions || [],
-          is_active: true
-        })
+        body: JSON.stringify(userPayload)
       });
+      console.log(`[SUPABASE HIERARCHY] Synced user ${normalizedEmail} to Supabase public.users`);
     } catch (dbErr) {
       console.warn(`[SUPABASE HIERARCHY] DB sync notice: ${dbErr.message}`);
     }
@@ -594,19 +660,22 @@ class HierarchyService {
     await HierarchyService.ensureTenantExists(creatorTenantId);
 
     const existing = db.queryOne('SELECT id FROM users WHERE email = ?', [email]);
-    if (existing) {
-      return { success: false, error: 'EXISTS', message: 'A user with this email already exists.' };
-    }
-
     const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
-    const userId = `usr_adm_${Date.now().toString().slice(-4)}`;
+    const userId = existing ? existing.id : `usr_adm_${Date.now().toString().slice(-4)}`;
     const permissions = ['MANAGE_USERS', 'MANAGE_PRODUCTS', 'MANAGE_INVENTORY', 'MANAGE_BRANCH_MANAGERS'];
 
-    db.run(
-      `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'admin', 'ALL', ?, '2222', 1)`,
-      [userId, creatorTenantId, username || email.split('@')[0], email, hash, salt, fullName, phone || '', JSON.stringify(permissions)]
-    );
+    if (existing) {
+      db.run(
+        `UPDATE users SET password_hash = ?, password_salt = ?, full_name = ?, phone = ?, role = 'admin', permissions_json = ?, pin_code = '2222', active = 1 WHERE id = ?`,
+        [hash, salt, fullName, phone || '', JSON.stringify(permissions), existing.id]
+      );
+    } else {
+      db.run(
+        `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'admin', 'ALL', ?, '2222', 1)`,
+        [userId, creatorTenantId, username || email.split('@')[0], email, hash, salt, fullName, phone || '', JSON.stringify(permissions)]
+      );
+    }
 
     // Sync to Supabase directly
     const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [creatorTenantId]);
@@ -661,10 +730,6 @@ class HierarchyService {
     await HierarchyService.ensureTenantExists(creatorTenantId);
 
     const existing = db.queryOne('SELECT id FROM users WHERE email = ?', [email]);
-    if (existing) {
-      return { success: false, error: 'EXISTS', message: 'A user with this email already exists.' };
-    }
-
     let branch = db.queryOne('SELECT * FROM branches WHERE id = ? AND tenant_id = ?', [branchId, creatorTenantId]);
     if (!branch) {
       branch = db.queryOne('SELECT * FROM branches WHERE id = ?', [branchId]);
@@ -689,14 +754,21 @@ class HierarchyService {
     }
 
     const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
-    const userId = `usr_mgr_${Date.now().toString().slice(-4)}`;
+    const userId = existing ? existing.id : `usr_mgr_${Date.now().toString().slice(-4)}`;
     const permissions = ['BRANCH_OPERATIONS', 'APPROVE_RETURNS', 'MONITOR_SHIFTS', 'MANAGE_STAFF'];
 
-    db.run(
-      `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'branch_manager', ?, ?, '3333', 1)`,
-      [userId, creatorTenantId, username || email.split('@')[0], email, hash, salt, fullName, phone || '', branchId, JSON.stringify(permissions)]
-    );
+    if (existing) {
+      db.run(
+        `UPDATE users SET password_hash = ?, password_salt = ?, full_name = ?, phone = ?, role = 'branch_manager', branch_id = ?, permissions_json = ?, pin_code = '3333', active = 1 WHERE id = ?`,
+        [hash, salt, fullName, phone || '', branchId, JSON.stringify(permissions), existing.id]
+      );
+    } else {
+      db.run(
+        `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'branch_manager', ?, ?, '3333', 1)`,
+        [userId, creatorTenantId, username || email.split('@')[0], email, hash, salt, fullName, phone || '', branchId, JSON.stringify(permissions)]
+      );
+    }
 
     // Sync to Supabase directly
     const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [creatorTenantId]);
@@ -762,12 +834,8 @@ class HierarchyService {
     await HierarchyService.ensureTenantExists(creatorTenantId);
 
     const existing = db.queryOne('SELECT id FROM users WHERE email = ?', [email]);
-    if (existing) {
-      return { success: false, error: 'EXISTS', message: 'A user with this email already exists.' };
-    }
-
     const { hash, salt } = CryptoUtils.hashEmergencyPassword(password);
-    const userId = `usr_${role.slice(0, 3)}_${Date.now().toString().slice(-4)}`;
+    const userId = existing ? existing.id : `usr_${role.slice(0, 3)}_${Date.now().toString().slice(-4)}`;
 
     let defaultPermissions = [];
     if (role === 'supervisor') defaultPermissions = ['SUSPEND_TRANSACTION', 'RESUME_TRANSACTION', 'APPROVE_DISCOUNTS', 'BIOMETRIC_AUTH'];
@@ -777,11 +845,18 @@ class HierarchyService {
     if (role === 'accountant') defaultPermissions = ['FINANCIAL_STATEMENTS', 'TAX_RECONCILIATION', 'EXPENSES'];
     if (role === 'auditor') defaultPermissions = ['READ_ONLY_AUDIT', 'AUDIT_LOG_INSPECTION'];
 
-    db.run(
-      `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      [userId, creatorTenantId, username || email.split('@')[0], email, hash, salt, fullName, phone || '', role, creatorBranchId || 'BR-001', JSON.stringify(defaultPermissions), pinCode]
-    );
+    if (existing) {
+      db.run(
+        `UPDATE users SET password_hash = ?, password_salt = ?, full_name = ?, phone = ?, role = ?, branch_id = ?, permissions_json = ?, pin_code = ?, active = 1 WHERE id = ?`,
+        [hash, salt, fullName, phone || '', role, creatorBranchId || 'BR-001', JSON.stringify(defaultPermissions), pinCode, existing.id]
+      );
+    } else {
+      db.run(
+        `INSERT INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        [userId, creatorTenantId, username || email.split('@')[0], email, hash, salt, fullName, phone || '', role, creatorBranchId || 'BR-001', JSON.stringify(defaultPermissions), pinCode]
+      );
+    }
 
     // Sync to Supabase directly
     const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [creatorTenantId]);

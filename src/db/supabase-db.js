@@ -41,36 +41,19 @@ async function resolveTenantUuid(slugOrId) {
 
   const cleanSlug = slugOrId.replace(/^tenant_/, '').toLowerCase();
 
-  // Try querying Supabase
+  // Query Supabase directly
   try {
-    const { data } = await query('tenants', { slug: cleanSlug });
-    if (data && data.length > 0) {
+    const { data, error } = await sbFetch(`tenants?slug=eq.${encodeURIComponent(cleanSlug)}&limit=1`, { method: 'GET' });
+    if (!error && Array.isArray(data) && data.length > 0 && isUuid(data[0].id)) {
       uuidCache.set(`tenant:${slugOrId}`, data[0].id);
       return data[0].id;
     }
 
     // Also try by legal_name
-    const { data: byName } = await query('tenants', null, {
-      orFilters: `slug.ilike.*${cleanSlug}*,legal_name.ilike.*${cleanSlug}*`
-    });
-    if (byName && byName.length > 0) {
+    const { data: byName, error: nameErr } = await sbFetch(`tenants?or=(slug.ilike.*${encodeURIComponent(cleanSlug)}*,legal_name.ilike.*${encodeURIComponent(cleanSlug)}*)&limit=1`, { method: 'GET' });
+    if (!nameErr && Array.isArray(byName) && byName.length > 0 && isUuid(byName[0].id)) {
       uuidCache.set(`tenant:${slugOrId}`, byName[0].id);
       return byName[0].id;
-    }
-
-    // Auto-create in Supabase if not exists
-    const { data: created } = await insert('tenants', {
-      slug: cleanSlug,
-      legal_name: cleanSlug.toUpperCase() + ' Supermarket',
-      trade_name: cleanSlug.toUpperCase() + ' Supermarket',
-      kra_pin: 'P051234567Z',
-      business_phone: '254700000000',
-      business_email: `${cleanSlug}@pos.ke`,
-      location: 'Nairobi'
-    });
-    if (created && created.length > 0) {
-      uuidCache.set(`tenant:${slugOrId}`, created[0].id);
-      return created[0].id;
     }
   } catch (e) {
     // offline
@@ -355,6 +338,74 @@ async function insert(table, records) {
 }
 
 /**
+ * UPSERT records (Insert or update on conflict).
+ */
+async function upsert(table, records, onConflict = 'id') {
+  const recArray = Array.isArray(records) ? records : [records];
+  const prepared = [];
+
+  for (const r of recArray) {
+    const item = { ...r };
+    // Remove non-UUID id if table requires UUID
+    if (item.id && !isUuid(item.id)) {
+      delete item.id;
+    }
+    // Resolve tenant_id to UUID
+    if (item.tenant_id && !isUuid(item.tenant_id) && item.tenant_id !== 'GLOBAL') {
+      const u = await resolveTenantUuid(item.tenant_id);
+      if (u) item.tenant_id = u;
+      else delete item.tenant_id;
+    }
+    // Resolve branch_id to UUID
+    if (item.branch_id && !isUuid(item.branch_id) && item.branch_id !== 'ALL') {
+      const u = await resolveBranchUuid(item.tenant_id, item.branch_id);
+      if (u) item.branch_id = u;
+      else delete item.branch_id;
+    }
+    // Resolve register_id to UUID
+    if (item.register_id && !isUuid(item.register_id)) {
+      const u = await resolveRegisterUuid(item.tenant_id, item.branch_id, item.register_id);
+      if (u) item.register_id = u;
+      else delete item.register_id;
+    }
+    // Resolve cashier_id to UUID
+    if (item.cashier_id && !isUuid(item.cashier_id)) {
+      const u = await resolveUserUuid(item.cashier_id);
+      if (u) item.cashier_id = u;
+      else delete item.cashier_id;
+    }
+    prepared.push(item);
+  }
+
+  const conflictParam = onConflict ? `?on_conflict=${encodeURIComponent(onConflict)}` : '';
+  const { data, error } = await sbFetch(`${table}${conflictParam}`, {
+    method: 'POST',
+    headers: {
+      'Prefer': 'resolution=merge-duplicates,return=representation'
+    },
+    body: JSON.stringify(prepared.length === 1 ? prepared[0] : prepared)
+  });
+
+  // Offline fallback
+  if (error && error.isOffline) {
+    try {
+      for (const rec of recArray) {
+        const keys = Object.keys(rec);
+        const placeholders = keys.map(() => '?').join(', ');
+        const values = keys.map(k => rec[k]);
+        db.run(`INSERT OR REPLACE INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`, values);
+      }
+      return { data: recArray, error: null };
+    } catch (e) {
+      return { data: recArray, error: null };
+    }
+  }
+
+  const resultData = Array.isArray(data) ? data : (data ? [data] : []);
+  return { data: resultData, error };
+}
+
+/**
  * UPDATE records.
  */
 async function update(table, filters, values) {
@@ -447,6 +498,7 @@ module.exports = {
   query,
   queryOne,
   insert,
+  upsert,
   update,
   remove,
   resolveTenantUuid,

@@ -223,15 +223,42 @@ class JwtAuth {
           finalUserId = authData.id || authData.user.id;
           authSession = authData.session || null;
           console.log(`[SUPABASE AUTH] Successfully registered user ${normalizedEmail} with Supabase UID: ${finalUserId}`);
-        } else if (authData && authData.error_code === 'user_already_exists') {
+        } else if (authRes.status === 422 || (authData && (authData.error_code === 'email_exists' || authData.error_code === 'user_already_exists' || (authData.msg && authData.msg.toLowerCase().includes('already'))))) {
           supabaseAuthSuccess = true;
-          console.log(`[SUPABASE AUTH] User ${normalizedEmail} already registered in Supabase. Proceeding.`);
+          console.log(`[SUPABASE AUTH] User ${normalizedEmail} already exists in GoTrue. Updating password.`);
           try {
-            const { data: existingUsers } = await sdb.query('users', { email: normalizedEmail });
-            if (existingUsers && existingUsers.length > 0) {
-              finalUserId = existingUsers[0].id;
+            if (serviceKey) {
+              const listRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+                headers: { 'apikey': serviceKey, 'Authorization': `Bearer ${serviceKey}` }
+              });
+              const list = await listRes.json();
+              const existingUser = (list.users || []).find(u => u.email === normalizedEmail);
+              if (existingUser) {
+                finalUserId = existingUser.id;
+                await fetch(`${supabaseUrl}/auth/v1/admin/users/${existingUser.id}`, {
+                  method: 'PUT',
+                  headers: {
+                    'apikey': serviceKey,
+                    'Authorization': `Bearer ${serviceKey}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({
+                    password: password,
+                    email_confirm: true,
+                    user_metadata: {
+                      full_name: fullName || `${businessName} Owner`,
+                      role: 'owner',
+                      phone: phone || '',
+                      tenant_name: businessName,
+                      trade_name: tradeName || businessName
+                    }
+                  })
+                });
+              }
             }
-          } catch (e) {}
+          } catch (e) {
+            console.warn('[SUPABASE AUTH] GoTrue update existing notice:', e.message);
+          }
         } else if (authData && (authData.msg || authData.message)) {
           console.warn(`[SUPABASE AUTH] Registration notice: ${authData.msg || authData.message}`);
           if (authRes.status >= 400 && !authData.id) {
@@ -255,7 +282,7 @@ class JwtAuth {
     if (isRemote && sdb.isConfigured()) {
       try {
         // Tenant
-        const { data: tData } = await sdb.insert('tenants', {
+        const { data: tData } = await sdb.upsert('tenants', {
           slug: cleanSlug,
           legal_name: businessName,
           trade_name: tradeName || businessName,
@@ -266,7 +293,7 @@ class JwtAuth {
           plan_tier: planId,
           subscription_status: 'ACTIVE',
           location: location || 'Nairobi'
-        });
+        }, 'slug');
 
         if (tData && tData.length > 0) {
           supabaseTenantUuid = tData[0].id;
@@ -305,18 +332,20 @@ class JwtAuth {
           }
 
           // User
-          await sdb.insert('users', {
-            id: finalUserId,
+          const { hash: pHash, salt: pSalt } = CryptoUtils.hashEmergencyPassword(password);
+          await sdb.upsert('users', {
+            id: finalUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(finalUserId) ? finalUserId : undefined,
             tenant_id: supabaseTenantUuid,
             username: normalizedEmail.split('@')[0],
             email: normalizedEmail,
+            password_hash: pHash,
+            password_salt: pSalt,
             full_name: fullName || `${businessName} Owner`,
             phone: phone || '254700000000',
             role: 'owner',
             branch_id: supabaseBranchUuid || null,
-            pin_code: '1234',
-            active: 1
-          });
+            is_active: true
+          }, 'email');
         }
       } catch (err) {
         console.warn(`[SUPABASE CLOUD] PostgREST insert notice: ${err.message}`);
@@ -560,8 +589,9 @@ class JwtAuth {
       return { success: false, error: 'MISSING_FIELDS', message: 'Email and password are required.' };
     }
 
-    const cleanInput = emailOrUsername.trim().toLowerCase();
-    const isSuperAdminEmail = cleanInput === 'sammyseth260@gmail.com';
+    const cleanInput = (emailOrUsername || '').toString().trim().toLowerCase();
+    const cleanPassword = (password || '').toString().trim();
+    const isSuperAdminEmail = cleanInput === 'sammyseth260@gmail.com' || cleanInput === 'sammyseth';
 
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
@@ -581,22 +611,22 @@ class JwtAuth {
           },
           body: JSON.stringify({
             email: cleanInput,
-            password: password
+            password: cleanPassword
           })
         });
 
         const authData = await authRes.json();
 
         if (authRes.ok && authData.access_token) {
-          // Password cryptographically verified by Supabase!
+          // Password cryptographically verified by Supabase GoTrue!
           authenticatedUser = {
             id: authData.user ? authData.user.id : `usr_${cleanInput.split('@')[0]}`,
             email: cleanInput,
             username: cleanInput.split('@')[0],
             full_name: (authData.user && authData.user.user_metadata && authData.user.user_metadata.full_name) || (isSuperAdminEmail ? 'Sammy Seth (Super Admin)' : cleanInput.split('@')[0]),
             role: isSuperAdminEmail ? 'super_admin' : ((authData.user && authData.user.user_metadata && authData.user.user_metadata.role) || 'owner'),
-            tenant_id: isSuperAdminEmail ? 'GLOBAL' : 'tenant_metromart',
-            branch_id: 'ALL',
+            tenant_id: isSuperAdminEmail ? 'GLOBAL' : ((authData.user && authData.user.user_metadata && authData.user.user_metadata.tenant_id) || 'tenant_metromart'),
+            branch_id: (authData.user && authData.user.user_metadata && authData.user.user_metadata.branch_id) || 'ALL',
             permissions: isSuperAdminEmail ? ['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'] : ['ALL_BUSINESS_CONTROL']
           };
 
@@ -630,7 +660,7 @@ class JwtAuth {
       }
     }
 
-    // 2. SECONDARY: Check Supabase public.users table (verifies staff created by store managers)
+    // 2. SECONDARY: Check Supabase public.users table (verifies staff created by store managers, supports both password and 4-digit POS PIN)
     if (!authenticatedUser && isRemote) {
       try {
         const dbRes = await fetch(`${supabaseUrl}/rest/v1/users?or=(email.eq.${encodeURIComponent(cleanInput)},username.eq.${encodeURIComponent(cleanInput)})&select=*`, {
@@ -644,8 +674,37 @@ class JwtAuth {
           const rows = await dbRes.json();
           if (rows && rows.length > 0) {
             const r = rows[0];
-            const isValid = CryptoUtils.verifyEmergencyPassword(password, r.password_hash, r.password_salt);
-            if (isValid) {
+            // Check 2a: Emergency password verify against public.users
+            let matched = r.password_hash && r.password_salt && CryptoUtils.verifyEmergencyPassword(cleanPassword, r.password_hash, r.password_salt);
+
+            // Check 2b: 4-Digit POS Quick PIN check against GoTrue user_metadata or local store
+            if (!matched && cleanPassword.length === 4 && /^\d{4}$/.test(cleanPassword)) {
+              // Check GoTrue user_metadata
+              if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+                try {
+                  const uRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+                    headers: {
+                      'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY,
+                      'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+                    }
+                  });
+                  const uData = await uRes.json();
+                  const gotrueUser = (uData.users || []).find(u => u.email === r.email);
+                  if (gotrueUser && gotrueUser.user_metadata && String(gotrueUser.user_metadata.pin_code) === cleanPassword) {
+                    matched = true;
+                  }
+                } catch (e) {}
+              }
+              // Also check SQLite pin_code
+              if (!matched) {
+                const localUser = db.queryOne('SELECT pin_code FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?', [r.email.toLowerCase(), (r.username || '').toLowerCase()]);
+                if (localUser && String(localUser.pin_code) === cleanPassword) {
+                  matched = true;
+                }
+              }
+            }
+
+            if (matched) {
               authenticatedUser = {
                 id: r.id,
                 email: r.email,
@@ -656,6 +715,24 @@ class JwtAuth {
                 branch_id: r.branch_id || 'ALL',
                 permissions: Array.isArray(r.permissions) ? r.permissions : []
               };
+
+              // Background-sync GoTrue password if full password was used
+              if (process.env.SUPABASE_SERVICE_ROLE_KEY && cleanPassword.length >= 6) {
+                try {
+                  const listRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+                    headers: { 'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY, 'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` }
+                  });
+                  const listData = await listRes.json();
+                  const gt = (listData.users || []).find(u => u.email === r.email);
+                  if (gt) {
+                    fetch(`${supabaseUrl}/auth/v1/admin/users/${gt.id}`, {
+                      method: 'PUT',
+                      headers: { 'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY, 'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ password: cleanPassword, email_confirm: true })
+                    }).catch(() => {});
+                  }
+                } catch (e) {}
+              }
             }
           }
         }
@@ -670,12 +747,15 @@ class JwtAuth {
       };
     }
 
-    // 3. TERTIARY: Check local store (for testing, offline mode, and seeded accounts)
+    // 3. TERTIARY: Check local store (local resilience fallback for offline mode, seeded accounts, and local PINs)
     if (!authenticatedUser) {
       const localUser = db.queryOne('SELECT * FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?', [cleanInput, cleanInput]);
       if (localUser && localUser.active) {
-        const isValid = CryptoUtils.verifyEmergencyPassword(password, localUser.password_hash, localUser.password_salt);
-        if (isValid) {
+        let matched = localUser.password_hash && localUser.password_salt && CryptoUtils.verifyEmergencyPassword(cleanPassword, localUser.password_hash, localUser.password_salt);
+        if (!matched && cleanPassword.length === 4 && /^\d{4}$/.test(cleanPassword) && localUser.pin_code) {
+          matched = String(localUser.pin_code) === cleanPassword;
+        }
+        if (matched) {
           authenticatedUser = {
             id: localUser.id,
             email: localUser.email,
@@ -695,18 +775,35 @@ class JwtAuth {
       return {
         success: false,
         error: 'INVALID_CREDENTIALS',
-        message: 'Invalid login credentials. Please check your email and password in Supabase.'
+        message: 'Invalid login credentials. Please check your email or username, and your password or 4-digit POS PIN.'
       };
     }
 
-    // Lookup tenant
+    // Lookup tenant (Check SQLite, with fallback to Supabase if tenant exists in cloud)
     const tenantId = authenticatedUser.tenant_id || 'GLOBAL';
-    const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [tenantId]) || {
-      id: tenantId,
-      name: isSuperAdminEmail ? 'Vertext POS Platform' : 'Supermarket Store',
-      currency: 'KES',
-      plan_id: 'enterprise'
-    };
+    let tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [tenantId]);
+    if (!tenant && isRemote && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenantId)) {
+      try {
+        const { data: tRows } = await sdb.query('tenants', { id: tenantId });
+        if (tRows && tRows.length > 0) {
+          tenant = tRows[0];
+          db.run(
+            `INSERT OR IGNORE INTO tenants (id, name, slug, trade_name, kra_pin, phone, email, currency, plan_id, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [tenant.id, tenant.legal_name || tenant.name || 'Store', tenant.slug || 'store', tenant.trade_name || tenant.name || 'Store', tenant.kra_pin || 'P050000000Z', tenant.business_phone || '', tenant.business_email || '', tenant.currency || 'KES', tenant.plan_tier || 'enterprise', tenant.subscription_status || 'ACTIVE']
+          );
+        }
+      } catch (e) {}
+    }
+
+    if (!tenant) {
+      tenant = {
+        id: tenantId,
+        name: isSuperAdminEmail ? 'Vertext POS Platform' : 'Supermarket Store',
+        currency: 'KES',
+        plan_id: 'enterprise'
+      };
+    }
 
     const token = this.signToken({
       userId: authenticatedUser.id,

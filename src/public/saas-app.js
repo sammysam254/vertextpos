@@ -1962,8 +1962,9 @@ window.handleCreateStaffSubmit = async function(e) {
   e.preventDefault();
   showLoading('Appointing Staff Member...');
 
+  const userRole = (STATE.currentUser && STATE.currentUser.role) || 'branch_manager';
   const payload = {
-    creatorRole: 'branch_manager',
+    creatorRole: userRole,
     role: document.getElementById('msRole').value,
     fullName: document.getElementById('msFullName').value.trim(),
     email: document.getElementById('msEmail').value.trim(),
@@ -1990,7 +1991,13 @@ window.handleCreateStaffSubmit = async function(e) {
   if (data.success) {
     window.closeCreateStaffModal();
     showToast(data.message, 'success');
-    window.loadBranchManagerDashboard();
+    if (userRole === 'owner') {
+      window.loadOwnerDashboard();
+    } else if (userRole === 'admin') {
+      window.loadAdminDashboard();
+    } else {
+      window.loadBranchManagerDashboard();
+    }
   } else {
     showToast(`Error: ${data.message}`, 'error');
   }
