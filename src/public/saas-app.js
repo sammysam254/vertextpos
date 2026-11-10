@@ -632,6 +632,16 @@ async function addItemByBarcode(barcode) {
     renderCart();
   } else {
     showToast(data.message, 'error');
+    if (data.message && data.message.toLowerCase().includes('not found')) {
+      if (confirm(`Barcode "${barcode}" is not in the supermarket catalog yet.\n\nWould you like to add this product now?`)) {
+        window.openAddProductModal();
+        const npBar = document.getElementById('npBarcode');
+        if (npBar) npBar.value = barcode;
+        const npSku = document.getElementById('npSku');
+        if (npSku) npSku.value = 'SKU-' + barcode.slice(-6);
+        document.getElementById('npName')?.focus();
+      }
+    }
   }
 }
 
@@ -1025,6 +1035,61 @@ function handleDetectedCode(code) {
     }, 1200);
   }
 }
+
+window.submitManualScannerInput = function() {
+  const input = document.getElementById('manualScannerInput');
+  if (!input || !input.value.trim()) return;
+  const code = input.value.trim();
+  input.value = '';
+  handleDetectedCode(code);
+};
+
+window.handleBarcodeImageUpload = async function(fileInput) {
+  if (!fileInput.files || fileInput.files.length === 0) return;
+  const file = fileInput.files[0];
+  showToast('Analyzing photo for barcode...', 'info');
+
+  try {
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+
+    // 1. Try Native BarcodeDetector
+    if ('BarcodeDetector' in window) {
+      try {
+        const detector = new BarcodeDetector({
+          formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'qr_code']
+        });
+        const barcodes = await detector.detect(img);
+        if (barcodes && barcodes.length > 0) {
+          handleDetectedCode(barcodes[0].rawValue);
+          return;
+        }
+      } catch (e) {}
+    }
+
+    // 2. Try ZXing
+    if (window.ZXing && window.ZXing.BrowserMultiFormatReader) {
+      try {
+        const reader = new ZXing.BrowserMultiFormatReader();
+        const result = await reader.decodeFromImageElement(img);
+        if (result && result.getText()) {
+          handleDetectedCode(result.getText());
+          return;
+        }
+      } catch (e) {}
+    }
+
+    showToast('Could not detect barcode from photo. Please ensure barcode is clear or type manually.', 'warning');
+  } catch (err) {
+    showToast('Failed to analyze photo: ' + err.message, 'error');
+  } finally {
+    fileInput.value = '';
+  }
+};
 
 // =========================================================================
 // 5. PER-BUSINESS DARAJA TILL PAYMENT & AUTO RECEIPT PRINTING
@@ -2621,38 +2686,55 @@ window.closeAddProductModal = function() {
 
 window.handleCreateProductSubmit = async function(e) {
   e.preventDefault();
-  showLoading('Saving product SKU...');
+  showLoading('Saving product SKU to supermarket catalog...');
 
+  const catElem = document.getElementById('npCategory');
   const payload = {
     name: document.getElementById('npName').value.trim(),
     barcode: document.getElementById('npBarcode').value.trim(),
     sku: document.getElementById('npSku').value.trim(),
-    category: document.getElementById('npCategory').value,
+    category: (catElem && catElem.value) || 'FMCG & Groceries',
+    initialStock: parseFloat(document.getElementById('npInitialStock')?.value) || 100,
     costPriceKes: parseFloat(document.getElementById('npCostPrice').value) || 0,
     sellingPriceKes: parseFloat(document.getElementById('npSellingPrice').value) || 0,
     wholesalePriceKes: parseFloat(document.getElementById('npWholesalePrice').value) || 0,
     vatRate: parseFloat(document.getElementById('npVatRate').value)
   };
 
-  const res = await fetch('/api/products', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Tenant-Id': STATE.currentTenantId,
-      'Authorization': `Bearer ${STATE.token}`
-    },
-    body: JSON.stringify(payload)
-  });
+  try {
+    const res = await fetch('/api/products', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Tenant-Id': STATE.currentTenantId,
+        'Authorization': `Bearer ${STATE.token}`
+      },
+      body: JSON.stringify(payload)
+    });
 
-  const data = await res.json();
-  hideLoading();
+    const data = await res.json();
+    hideLoading();
 
-  if (data.success) {
-    window.closeAddProductModal();
-    showToast('Product added to catalog!', 'success');
-    await loadInventoryTable();
-  } else {
-    showToast(`Error: ${data.message}`, 'error');
+    if (data.success) {
+      window.closeAddProductModal();
+      showToast(`Product "${payload.name}" saved successfully!`, 'success');
+      await loadProducts();
+      if (document.getElementById('inventoryTableBody')) {
+        await loadInventoryTable();
+      }
+
+      // If POS terminal is active, immediately add this newly created item to customer cart!
+      const activeTab = document.querySelector('.pos-tab-btn.active');
+      const isPos = activeTab && activeTab.dataset.tab === 'pos';
+      if (isPos && payload.barcode) {
+        await addItemByBarcode(payload.barcode);
+      }
+    } else {
+      showToast(`Error: ${data.message || 'Failed to save product.'}`, 'error');
+    }
+  } catch (err) {
+    hideLoading();
+    showToast('Failed to save product: ' + err.message, 'error');
   }
 };
 

@@ -943,31 +943,41 @@
                 <div class="scan-station-header">
                   <div class="scan-title-group">
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <line x1="3" y1="5" x2="3" y2="19"/><line x1="7" y1="5" x2="7" y2="19"/><line x1="11" y1="5" x2="11" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/><line x1="21" y1="5" x2="21" y2="19"/>
+                      <line x1="3" y1="5" x2="3" y2="19"/><line x1="7" y1="5" x2="7" y2="19"/><line x1="11" y1="5" x2="11" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/><line x1="21" y1="21" x2="21" y2="19"/>
                     </svg>
                     <h4>Barcode Scanner Station &bull; SKU Search</h4>
                   </div>
-                  <div class="pricing-mode-toggle">
-                    <span class="toggle-label">Pricing Mode:</span>
-                    <button type="button" id="btnPricingRetail" class="btn btn-sm btn-primary" onclick="window.setPricingTier('retail')">Retail</button>
-                    <button type="button" id="btnPricingWholesale" class="btn btn-sm btn-outline" onclick="window.setPricingTier('wholesale')">Wholesale Bulk</button>
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <div class="pricing-mode-toggle">
+                      <span class="toggle-label">Pricing:</span>
+                      <button type="button" id="btnPricingRetail" class="btn btn-sm btn-primary" onclick="window.setPricingTier('retail')">Retail</button>
+                      <button type="button" id="btnPricingWholesale" class="btn btn-sm btn-outline" onclick="window.setPricingTier('wholesale')">Wholesale Bulk</button>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="window.openAddProductModal()" title="Add new item to catalog">
+                      + Add New Product
+                    </button>
                   </div>
                 </div>
 
                 <div class="barcode-scan-bar">
-                  <div class="input-with-icon-lg">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="scan-icon-svg">
-                      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                    </svg>
-                    <input type="text" id="txtBarcode" placeholder="Point scanner at barcode or type product SKU (e.g. 616110000018 or Unga)..." autofocus autocomplete="off" oninput="window.handleSkuSearchInput(this.value)" onkeydown="window.handleScanKeydown(event)">
-                    <button class="btn btn-primary" onclick="window.handleBarcodeEnter()">Scan / Add</button>
-                    <button class="btn btn-secondary btn-icon" onclick="window.toggleCameraScanner()" title="Toggle Camera Scanner">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                      Camera
+                  <div class="scan-bar-row">
+                    <div class="input-with-icon-lg">
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="scan-icon-svg">
+                        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                      </svg>
+                      <input type="text" id="txtBarcode" placeholder="Scan physical barcode, click Camera, or type name/SKU (e.g. 616110000018, Unga, Milk)..." autofocus autocomplete="off" oninput="window.handleSkuSearchInput(this.value)" onkeydown="window.handleScanKeydown(event)">
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="window.handleBarcodeEnter()" style="padding:10px 18px; font-weight:700;">
+                      Scan / Add
+                    </button>
+                    <button type="button" class="btn btn-success" id="btnPosCameraScan" onclick="window.toggleCameraScanner('cart')" title="Scan barcode with phone camera or laptop webcam" style="padding:10px 16px; font-weight:700; background:#16a34a; border-color:#16a34a; color:#ffffff; display:inline-flex; align-items:center; gap:6px;">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                      📷 Camera Scan
                     </button>
                   </div>
+                </div>
 
-                  <div class="scanner-status-hint">
+                <div class="scanner-status-hint">
                     <span>Hardware Scanner: <strong style="color:#16a34a;">HID Wedge Ready (&lt;15ms)</strong></span> &bull; 
                     <span>Kenyan Prefix: <strong>616 (EAN-13)</strong></span> &bull; 
                     <span id="lblActivePricingMode">Retail Pricing Active</span>
@@ -1815,17 +1825,38 @@
           </div>
           <div class="form-row">
             <div class="form-group flex-1">
-              <label>EAN-13 Barcode:</label>
-              <div style="display:flex; gap:6px;">
-                <input type="text" id="npBarcode" class="form-control" placeholder="616XXXXXXXXXX" required>
-                <button type="button" class="btn btn-secondary" onclick="window.scanBarcodeForNewProduct()" title="Scan product barcode with camera">
-                  📷 Scan
+              <label>EAN-13 Barcode (Scan or Type):</label>
+              <div style="display:flex; gap:8px;">
+                <input type="text" id="npBarcode" class="form-control" placeholder="616XXXXXXXXXX (or scan with reader)" required style="font-weight:700;">
+                <button type="button" class="btn btn-success" onclick="window.scanBarcodeForNewProduct()" title="Scan product barcode with camera" style="background:#16a34a; border-color:#16a34a; color:#fff; white-space:nowrap; padding:6px 12px; font-weight:700;">
+                  📷 Scan with Camera
                 </button>
               </div>
+              <small class="helper-text" style="color:#64748b; font-size:0.75rem;">
+                💡 You can also point any physical USB / Bluetooth barcode gun at this field to scan automatically.
+              </small>
             </div>
             <div class="form-group flex-1">
               <label>SKU Code:</label>
               <input type="text" id="npSku" class="form-control" placeholder="e.g. MILK-TUZ-500ML">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label>Category:</label>
+              <select id="npCategory" class="form-control">
+                <option value="FMCG & Groceries">FMCG &amp; Groceries</option>
+                <option value="Dairy & Beverages">Dairy &amp; Beverages</option>
+                <option value="Bakery & Snacks">Bakery &amp; Snacks</option>
+                <option value="Household & Hygiene">Household &amp; Hygiene</option>
+                <option value="Personal Care">Personal Care</option>
+                <option value="Fresh Produce">Fresh Produce</option>
+                <option value="General Merchandise">General Merchandise</option>
+              </select>
+            </div>
+            <div class="form-group flex-1">
+              <label>Initial Shelf Stock (Units):</label>
+              <input type="number" id="npInitialStock" class="form-control" value="100" min="1" step="1">
             </div>
           </div>
           <div class="form-row">
@@ -1849,7 +1880,7 @@
               <option value="0.0">Zero-Rated 0% VAT (Rate B - Foodstuffs)</option>
             </select>
           </div>
-          <button type="submit" class="btn btn-primary btn-block btn-lg mt-3">Save Product SKU</button>
+          <button type="submit" class="btn btn-primary btn-block btn-lg mt-3" style="font-weight:700;">💾 Save Product SKU to Supermarket</button>
         </form>
       </div>
     </div>
@@ -2055,18 +2086,26 @@
           </div>
         </div>
 
-        <div class="scanner-controls-bar">
-          <div style="display:flex; align-items:center; gap:8px; flex:1;">
-            <select id="selCameraDevice" class="form-control form-control-sm" style="background:#0f172a; color:#fff; border-color:#334155; font-size:0.75rem; max-width:200px;" onchange="window.switchCamera(this.value)">
+        <div class="scanner-controls-bar" style="display:flex; flex-direction:column; gap:8px; padding:10px 14px; background:#0f172a;">
+          <div style="display:flex; align-items:center; gap:8px; width:100%;">
+            <select id="selCameraDevice" class="form-control form-control-sm" style="background:#1e293b; color:#fff; border-color:#334155; font-size:0.75rem; flex:1;" onchange="window.switchCamera(this.value)">
               <option value="">Auto-Detecting Camera...</option>
             </select>
             <button type="button" class="btn btn-sm btn-secondary" id="btnToggleTorch" onclick="window.toggleTorch()" title="Toggle Flashlight / Torch" style="padding:4px 8px;">
               🔦 Torch
             </button>
+            <input type="file" id="cameraFileInput" accept="image/*" capture="environment" style="display:none;" onchange="window.handleBarcodeImageUpload(this)">
+            <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('cameraFileInput').click()" title="Snap photo of barcode with phone camera">
+              📷 Photo
+            </button>
+            <button type="button" class="btn btn-sm btn-primary" onclick="window.closeCameraScanner()">
+              Done
+            </button>
           </div>
-          <button type="button" class="btn btn-sm btn-primary" onclick="window.closeCameraScanner()">
-            Done Scanning
-          </button>
+          <div style="display:flex; gap:6px; width:100%;">
+            <input type="text" id="manualScannerInput" placeholder="Or type barcode here..." class="form-control form-control-sm" style="background:#1e293b; color:#fff; border-color:#334155; font-size:0.8rem;" onkeydown="if(event.key==='Enter'){event.preventDefault();window.submitManualScannerInput();}">
+            <button type="button" class="btn btn-sm btn-secondary" onclick="window.submitManualScannerInput()" style="white-space:nowrap;">Enter</button>
+          </div>
         </div>
       </div>
     </div>

@@ -166,29 +166,61 @@ class SaasRouter {
       }
 
       if (pathname === '/api/products' && req.method === 'POST') {
-        const { name, barcode, sku, category, unit, costPriceKes, sellingPriceKes, vatRate } = body;
+        const { name, barcode, sku, category, unit, costPriceKes, sellingPriceKes, wholesalePriceKes, vatRate, initialStock } = body;
+        await HierarchyService.ensureTenantExists(tenantId);
+
         const prodId = `PRD-${Date.now().toString().slice(-6)}`;
         db.run(
-          `INSERT INTO products (id, tenant_id, name, barcode, sku, category, unit, cost_price_kes, selling_price_kes, vat_rate, is_active)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-          [prodId, tenantId, name, barcode, sku || barcode, category || 'General', unit || 'PCS', costPriceKes || 0, sellingPriceKes || 0, vatRate !== undefined ? vatRate : 16.0]
+          `INSERT INTO products (id, tenant_id, name, barcode, sku, category, unit, cost_price_kes, selling_price_kes, wholesale_price_kes, vat_rate, is_active)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+          [prodId, tenantId, name, barcode, sku || barcode, category || 'FMCG & Groceries', unit || 'PCS', costPriceKes || 0, sellingPriceKes || 0, wholesalePriceKes || sellingPriceKes || 0, vatRate !== undefined ? vatRate : 16.0]
         );
 
-        // Sync directly to Supabase
-        sdb.insert('products', {
-          tenant_id: tenantId,
-          name,
-          barcode,
-          sku: sku || barcode,
-          category: category || 'General',
-          unit: unit || 'PCS',
-          cost_price_kes: costPriceKes || 0,
-          selling_price_kes: sellingPriceKes || 0,
-          vat_rate: vatRate !== undefined ? vatRate : 16.0,
-          is_active: true
-        }).catch(() => {});
+        // Also add initial stock to inventory table
+        const branchId = ctx.branchId || 'BR-001';
+        const stockQty = Number(initialStock) || 100;
+        try {
+          db.run(
+            `INSERT OR REPLACE INTO inventory (id, tenant_id, branch_id, product_id, quantity, reorder_level)
+             VALUES (?, ?, ?, ?, ?, 10)`,
+            [`INV-${prodId}`, tenantId, branchId, prodId, stockQty]
+          );
+        } catch (e) {}
 
-        return this.sendJson(res, 201, { success: true, productId: prodId });
+        // Sync directly to Supabase Cloud
+        if (sdb.isConfigured()) {
+          try {
+            const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+            const { data: pData } = await sdb.insert('products', {
+              tenant_id: tenantUuid,
+              name,
+              barcode,
+              sku: sku || barcode,
+              category: category || 'FMCG & Groceries',
+              unit: unit || 'PCS',
+              cost_price_kes: costPriceKes || 0,
+              selling_price_kes: sellingPriceKes || 0,
+              wholesale_price_kes: wholesalePriceKes || sellingPriceKes || 0,
+              vat_rate: vatRate !== undefined ? vatRate : 16.0,
+              is_active: true
+            });
+
+            if (pData && pData.length > 0) {
+              const bUuid = await sdb.resolveBranchUuid(tenantUuid, branchId);
+              await sdb.insert('inventory', {
+                tenant_id: tenantUuid,
+                branch_id: bUuid,
+                product_id: pData[0].id,
+                quantity: stockQty,
+                reorder_level: 10
+              });
+            }
+          } catch (cloudErr) {
+            console.warn('[SUPABASE PRODUCT SYNC] notice:', cloudErr.message);
+          }
+        }
+
+        return this.sendJson(res, 201, { success: true, productId: prodId, message: `Product "${name}" created successfully.` });
       }
 
       // 5. Branches & Registers
