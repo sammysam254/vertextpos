@@ -162,29 +162,61 @@ class JwtAuth {
     let supabaseAuthSuccess = false;
     let authSession = null;
 
-    // 1. DIRECT SUPABASE AUTH API: Create User in Supabase Auth via API Key
+    // 1. DIRECT SUPABASE AUTH API: Create User in Supabase Auth via Admin/Signup API Key
     if (isRemote) {
       try {
-        const authRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
-          method: 'POST',
-          headers: {
-            'apikey': supabaseKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            email: normalizedEmail,
-            password: password,
-            data: {
-              full_name: fullName || `${businessName} Owner`,
-              role: 'owner',
-              phone: phone || '',
-              tenant_name: businessName,
-              trade_name: tradeName || businessName
-            }
-          })
-        });
+        const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+        let authRes, authData;
 
-        const authData = await authRes.json();
+        // Try Admin API first with auto-confirm
+        if (serviceKey) {
+          try {
+            authRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+              method: 'POST',
+              headers: {
+                'apikey': serviceKey,
+                'Authorization': `Bearer ${serviceKey}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                email: normalizedEmail,
+                password: password,
+                email_confirm: true,
+                user_metadata: {
+                  full_name: fullName || `${businessName} Owner`,
+                  role: 'owner',
+                  phone: phone || '',
+                  tenant_name: businessName,
+                  trade_name: tradeName || businessName
+                }
+              })
+            });
+            authData = await authRes.json();
+          } catch (e) {}
+        }
+
+        // Fallback to regular signup if admin API wasn't used or failed
+        if (!authData || (!authData.id && !authData.user)) {
+          authRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+            method: 'POST',
+            headers: {
+              'apikey': supabaseKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              email: normalizedEmail,
+              password: password,
+              data: {
+                full_name: fullName || `${businessName} Owner`,
+                role: 'owner',
+                phone: phone || '',
+                tenant_name: businessName,
+                trade_name: tradeName || businessName
+              }
+            })
+          });
+          authData = await authRes.json();
+        }
         if (authRes.ok && (authData.id || (authData.user && authData.user.id))) {
           supabaseAuthSuccess = true;
           finalUserId = authData.id || authData.user.id;
@@ -413,22 +445,51 @@ class JwtAuth {
 
       if (isRemote) {
         try {
-          const authRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
-            method: 'POST',
-            headers: {
-              'apikey': supabaseKey,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              email: normalizedEmail,
-              password,
-              data: {
-                full_name: fullName || 'Sammy Seth (Super Admin)',
-                role: 'super_admin'
-              }
-            })
-          });
-          const authData = await authRes.json();
+          const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+          let authRes, authData;
+
+          if (serviceKey) {
+            try {
+              authRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+                method: 'POST',
+                headers: {
+                  'apikey': serviceKey,
+                  'Authorization': `Bearer ${serviceKey}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  email: normalizedEmail,
+                  password,
+                  email_confirm: true,
+                  user_metadata: {
+                    full_name: fullName || 'Sammy Seth (Super Admin)',
+                    role: 'super_admin'
+                  }
+                })
+              });
+              authData = await authRes.json();
+            } catch (e) {}
+          }
+
+          if (!authData || (!authData.id && !authData.user)) {
+            authRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+              method: 'POST',
+              headers: {
+                'apikey': supabaseKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                email: normalizedEmail,
+                password,
+                data: {
+                  full_name: fullName || 'Sammy Seth (Super Admin)',
+                  role: 'super_admin'
+                }
+              })
+            });
+            authData = await authRes.json();
+          }
+
           if (authRes.ok && (authData.id || (authData.user && authData.user.id))) {
             finalUserId = authData.id || authData.user.id;
             authSession = authData.session;
