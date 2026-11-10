@@ -2685,23 +2685,41 @@ window.closeAddProductModal = function() {
 };
 
 window.handleCreateProductSubmit = async function(e) {
-  e.preventDefault();
-  showLoading('Saving product SKU to supermarket catalog...');
-
-  const catElem = document.getElementById('npCategory');
-  const payload = {
-    name: document.getElementById('npName').value.trim(),
-    barcode: document.getElementById('npBarcode').value.trim(),
-    sku: document.getElementById('npSku').value.trim(),
-    category: (catElem && catElem.value) || 'FMCG & Groceries',
-    initialStock: parseFloat(document.getElementById('npInitialStock')?.value) || 100,
-    costPriceKes: parseFloat(document.getElementById('npCostPrice').value) || 0,
-    sellingPriceKes: parseFloat(document.getElementById('npSellingPrice').value) || 0,
-    wholesalePriceKes: parseFloat(document.getElementById('npWholesalePrice').value) || 0,
-    vatRate: parseFloat(document.getElementById('npVatRate').value)
-  };
+  if (e && e.preventDefault) e.preventDefault();
 
   try {
+    showLoading('Saving product SKU to supermarket catalog...');
+
+    const nameInput = document.getElementById('npName');
+    const barcodeInput = document.getElementById('npBarcode');
+    const skuInput = document.getElementById('npSku');
+    const catElem = document.getElementById('npCategory');
+    const stockInput = document.getElementById('npInitialStock');
+    const costInput = document.getElementById('npCostPrice');
+    const sellInput = document.getElementById('npSellingPrice');
+    const wholeInput = document.getElementById('npWholesalePrice');
+    const vatElem = document.getElementById('npVatRate');
+
+    const name = nameInput ? nameInput.value.trim() : '';
+    const barcode = barcodeInput ? barcodeInput.value.trim() : '';
+
+    if (!name || !barcode) {
+      showToast('Product name and barcode are required.', 'warning');
+      return;
+    }
+
+    const payload = {
+      name,
+      barcode,
+      sku: (skuInput && skuInput.value.trim()) || ('SKU-' + barcode.slice(-6)),
+      category: (catElem && catElem.value) || 'FMCG & Groceries',
+      initialStock: parseFloat(stockInput?.value) || 100,
+      costPriceKes: parseFloat(costInput?.value) || 0,
+      sellingPriceKes: parseFloat(sellInput?.value) || 0,
+      wholesalePriceKes: parseFloat(wholeInput?.value) || parseFloat(sellInput?.value) || 0,
+      vatRate: vatElem ? parseFloat(vatElem.value) : 16.0
+    };
+
     const res = await fetch('/api/products', {
       method: 'POST',
       headers: {
@@ -2713,15 +2731,16 @@ window.handleCreateProductSubmit = async function(e) {
     });
 
     const data = await res.json();
-    hideLoading();
 
     if (data.success) {
       window.closeAddProductModal();
       showToast(`Product "${payload.name}" saved successfully!`, 'success');
-      await loadProducts();
-      if (document.getElementById('inventoryTableBody')) {
-        await loadInventoryTable();
-      }
+      try { await loadProducts(); } catch (e) {}
+      try {
+        if (document.getElementById('inventoryTableBody')) {
+          await loadInventoryTable();
+        }
+      } catch (e) {}
 
       // If POS terminal is active, immediately add this newly created item to customer cart!
       const activeTab = document.querySelector('.pos-tab-btn.active');
@@ -2733,8 +2752,9 @@ window.handleCreateProductSubmit = async function(e) {
       showToast(`Error: ${data.message || 'Failed to save product.'}`, 'error');
     }
   } catch (err) {
-    hideLoading();
     showToast('Failed to save product: ' + err.message, 'error');
+  } finally {
+    hideLoading();
   }
 };
 
@@ -2879,17 +2899,30 @@ async function loadDashboardReports() {
 }
 
 // UI Helpers
+let loadingSafetyTimeout = null;
 function showLoading(msg = 'Loading...') {
   const overlay = document.getElementById('loadingOverlay');
   const text = document.getElementById('lblLoadingText');
   if (text) text.innerText = msg;
   if (overlay) overlay.style.display = 'flex';
+
+  // Failsafe: automatically dismiss after 5 seconds so user is never stuck
+  if (loadingSafetyTimeout) clearTimeout(loadingSafetyTimeout);
+  loadingSafetyTimeout = setTimeout(() => {
+    hideLoading();
+  }, 5000);
 }
 
 function hideLoading() {
+  if (loadingSafetyTimeout) {
+    clearTimeout(loadingSafetyTimeout);
+    loadingSafetyTimeout = null;
+  }
   const overlay = document.getElementById('loadingOverlay');
   if (overlay) overlay.style.display = 'none';
 }
+window.hideLoading = hideLoading;
+window.showLoading = showLoading;
 
 function showToast(message, type = 'info') {
   const toast = document.getElementById('toastNotification');
