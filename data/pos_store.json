@@ -112,8 +112,8 @@
         "SYSTEM_CONFIG",
         "AUDIT_REVIEW"
       ],
-      "emergencyPasswordHash": "53d256baa2931bd457a42c3a5f6f1ee682086c0ce4a852de5a3d68ad551e4e3adfe671e39534cb7a40742a06589db0efa56f75a88b07f4ff5168f4e967fb695c",
-      "emergencyPasswordSalt": "a419c79c34efa21981acb8367d2343fa",
+      "emergencyPasswordHash": "c761d78194e134135ccaab31735179ea9c5e25b865dcbfb090aa5a44eba5e8825c3aa39a9a78cdb9411679042f134ccb19787be6446ea7e3a041c233771ea156",
+      "emergencyPasswordSalt": "15f0e75dedee09781ee9a582adae54a5",
       "active": true
     }
   ],
@@ -123,11 +123,11 @@
       "userId": "user_s01",
       "userName": "Alice Vance",
       "algorithm": "ES256",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEDWLE6QOTni7KJkhq8Oobxi509aCR\nlh8hmYDptCklFPDgF93lONNZM2D3MKUslxMtI/Q6GBx8xqxMK4mrmiss8g==\n-----END PUBLIC KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEep3jeBPzBbrnT58hSaO5f5Gxchbc\nHX6UYv+Ha5QZs/K9T8A6T8rDctze3PVoEquXNKaLlEHvN73dB7N8m25fGw==\n-----END PUBLIC KEY-----\n",
       "signCount": 1,
       "deviceType": "WBF_FINGERPRINT",
       "deviceSerial": "DP-UAREU4500-SN8492",
-      "enrolledAt": "2026-10-11T08:22:56.864Z",
+      "enrolledAt": "2026-10-11T09:04:06.551Z",
       "revokedAt": null,
       "status": "ACTIVE",
       "branchPermissions": [
@@ -140,11 +140,11 @@
       "userId": "user_s02",
       "userName": "Bob Chen",
       "algorithm": "ES256",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEg8uGmfKDHIvdVt5ztRhVeXC68dBa\nTYzOJfFDR0vWv68FpEwnbxrekxq4Q9vkD1z7q/j4X9OwVNliQC2LpLvjsQ==\n-----END PUBLIC KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4nxxyJlE95Mdn444RMzEwnW0h1PL\nH3UYVR3o1EFG7uYieXTQIVAgKDyIp7yG/crdfx/MxC0pkytEE7eChJwBXg==\n-----END PUBLIC KEY-----\n",
       "signCount": 1,
       "deviceType": "WBF_FINGERPRINT",
       "deviceSerial": "DP-UAREU4500-SN8492",
-      "enrolledAt": "2026-10-26T08:22:56.866Z",
+      "enrolledAt": "2026-10-26T09:04:06.553Z",
       "revokedAt": null,
       "status": "ACTIVE",
       "branchPermissions": [
@@ -157,11 +157,11 @@
       "userId": "user_s03",
       "userName": "Carol Diaz",
       "algorithm": "ES256",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1GsDyqOTmF0WOrZPsaXT/S9iN/LX\nFozWvjYYWe7/O43XYJ+8bYiFN/oHplOueYSY0ybXuImvPHR9iW9g9HitJQ==\n-----END PUBLIC KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEo+hTlCulzssRVI3z2IQBl0Q8e3OV\nRFpuycV59BurFW9Ap9D3fQK5CoVwvQS/nRqaMVYdmtWK66WD20Dm1AZY5w==\n-----END PUBLIC KEY-----\n",
       "signCount": 1,
       "deviceType": "WBF_FINGERPRINT",
       "deviceSerial": "DP-UAREU4500-SN9999",
-      "enrolledAt": "2026-11-05T08:22:56.866Z",
+      "enrolledAt": "2026-11-05T09:04:06.553Z",
       "revokedAt": null,
       "status": "ACTIVE",
       "branchPermissions": [
@@ -174,11 +174,11 @@
       "userId": "user_c01",
       "userName": "Dave Miller (Cashier)",
       "algorithm": "ES256",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENHQGDL2h3A//9pHSRsIPD2OtfqQT\nq1ThhnSobTF/3bJoSkTYtAKhHlhVxyrexr9FAes84zpYHjYBQ7f5DZSCiA==\n-----END PUBLIC KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAExaEKwErTViPmpM8IR+w+Wf54ECtf\n1xLi34ZdNMaCcra7k4Rx+JnB+CB/Uubga+3mHb6vjudK30iJk3OTUSIT/A==\n-----END PUBLIC KEY-----\n",
       "signCount": 1,
       "deviceType": "WBF_FINGERPRINT",
       "deviceSerial": "DP-UAREU4500-SN8492",
-      "enrolledAt": "2026-11-08T08:22:56.866Z",
+      "enrolledAt": "2026-11-08T09:04:06.553Z",
       "revokedAt": null,
       "status": "ACTIVE",
       "branchPermissions": [
@@ -203,7 +203,7 @@
         "WBF_WINBIO",
         "DEVICE_CHALLENGE_RESPONSE"
       ],
-      "lastHealthCheck": "2026-11-10T08:22:56.866Z"
+      "lastHealthCheck": "2026-11-10T09:04:06.553Z"
     },
     {
       "id": "DEV-FP-02",
@@ -220,7 +220,7 @@
         "SECUGEN_SDK",
         "DEVICE_CHALLENGE_RESPONSE"
       ],
-      "lastHealthCheck": "2026-11-10T08:22:56.866Z"
+      "lastHealthCheck": "2026-11-10T09:04:06.553Z"
     },
     {
       "id": "DEV-FP-03",
@@ -237,14 +237,14 @@
         "WEBAUTHN_FIDO2",
         "PLATFORM_ENCLAVE"
       ],
-      "lastHealthCheck": "2026-11-10T08:22:56.866Z"
+      "lastHealthCheck": "2026-11-10T09:04:06.553Z"
     }
   ],
   "transactions": [],
   "auditLogs": [
     {
-      "id": "LOG-1794298976866-9100",
-      "timestamp": "2026-11-10T08:22:56.866Z",
+      "id": "LOG-1794301446553-9776",
+      "timestamp": "2026-11-10T09:04:06.553Z",
       "eventType": "SYSTEM_INITIALIZATION",
       "userId": "user_admin",
       "userName": "Eleanor Wright",

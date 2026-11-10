@@ -337,13 +337,13 @@ class SaasRouter {
 
       // 11. Hierarchical User & Role Management Engine
       if (pathname === '/api/hierarchy/branches' && req.method === 'GET') {
-        const branches = HierarchyService.getBranches({ tenantId });
-        return this.sendJson(res, 200, { branches });
+        const branches = await HierarchyService.getBranches({ tenantId });
+        return this.sendJson(res, 200, { branches: branches || [] });
       }
 
       if (pathname === '/api/hierarchy/create-branch' && req.method === 'POST') {
         const creatorRole = (ctx.user && ctx.user.role) || ctx.userRole || body.creatorRole || 'owner';
-        const result = HierarchyService.createBranch({
+        const result = await HierarchyService.createBranch({
           creatorRole,
           creatorTenantId: tenantId,
           code: body.code,
@@ -469,7 +469,7 @@ class SaasRouter {
       // 12. Dedicated 10-Role Dashboard Metrics Engine
       if (pathname.startsWith('/api/dashboard/') && req.method === 'GET') {
         const role = pathname.split('/')[3];
-        const dashboardData = this.getRoleDashboardData(role, tenantId, ctx);
+        const dashboardData = await this.getRoleDashboardData(role, tenantId, ctx);
         return this.sendJson(res, 200, dashboardData);
       }
 
@@ -677,7 +677,9 @@ class SaasRouter {
     }
   }
 
-  static getRoleDashboardData(role, tenantId, ctx) {
+  static async getRoleDashboardData(role, tenantId, ctx) {
+    await HierarchyService.ensureTenantExists(tenantId);
+
     const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [tenantId]) || {
       id: tenantId,
       name: 'MetroMart Supermarkets Ltd',
@@ -729,21 +731,33 @@ class SaasRouter {
           WHERE tenant_id = ? AND status = 'COMPLETED'
         `, [tenantId]) || { transactionCount: 0, totalRevenueKes: 0, vatCollectedKes: 0, cashRevenueKes: 0, mpesaRevenueKes: 0 };
 
-        const branches = db.queryAll(`
-          SELECT b.id, b.name, b.location, b.phone, b.status,
-                 (SELECT COUNT(id) FROM registers WHERE branch_id = b.id) as registerCount,
-                 (SELECT COUNT(id) FROM sales WHERE branch_id = b.id AND status = 'COMPLETED') as branchSalesCount,
-                 (SELECT COALESCE(SUM(total_kes), 0.0) FROM sales WHERE branch_id = b.id AND status = 'COMPLETED') as branchRevenueKes
-          FROM branches b
-          WHERE b.tenant_id = ?
-        `, [tenantId]);
+        const branches = await HierarchyService.getBranches({ tenantId });
 
-        const admins = db.queryAll(
+        let admins = db.queryAll(
           `SELECT id, username, email, full_name, phone, role, active, created_at 
            FROM users 
            WHERE tenant_id = ? AND role = 'admin'`,
           [tenantId]
         );
+
+        if ((!admins || admins.length === 0) && sdb.isConfigured()) {
+          try {
+            const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+            if (tenantUuid) {
+              const { data: remoteAdmins } = await sdb.query('users', { tenant_id: tenantUuid, role: 'admin' });
+              if (remoteAdmins && remoteAdmins.length > 0) {
+                for (const ra of remoteAdmins) {
+                  db.run(
+                    `INSERT OR IGNORE INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
+                     VALUES (?, ?, ?, ?, 'hash', 'salt', ?, ?, 'admin', 'ALL', '[]', '2222', 1)`,
+                    [ra.id, tenantId, ra.username || ra.email.split('@')[0], ra.email, ra.full_name || 'Admin', ra.phone || '']
+                  );
+                }
+                admins = db.queryAll('SELECT id, username, email, full_name, phone, role, active, created_at FROM users WHERE tenant_id = ? AND role = \'admin\'', [tenantId]);
+              }
+            }
+          } catch (e) {}
+        }
 
         return {
           role: 'owner',
@@ -763,8 +777,8 @@ class SaasRouter {
             nextBillingDate: '2026-12-01',
             status: 'ACTIVE'
           },
-          branches,
-          admins
+          branches: branches || [],
+          admins: admins || []
         };
       }
 
@@ -781,7 +795,7 @@ class SaasRouter {
           WHERE u.tenant_id = ? AND u.role = 'branch_manager'
         `, [tenantId]);
 
-        const branches = db.queryAll('SELECT * FROM branches WHERE tenant_id = ?', [tenantId]);
+        const branches = await HierarchyService.getBranches({ tenantId });
 
         return {
           role: 'admin',
@@ -790,8 +804,8 @@ class SaasRouter {
           zeroRatedCount,
           standardVatCount,
           lowStockCount,
-          branchManagers,
-          branches
+          branchManagers: branchManagers || [],
+          branches: branches || []
         };
       }
 

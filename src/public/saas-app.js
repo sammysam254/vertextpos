@@ -699,8 +699,6 @@ window.handleCancelSale = async function() {
   }
 };
 
-};
-
 // =========================================================================
 // 4B. POS BARCODE SCANNING ENGINE (HARDWARE USB/BLUETOOTH + CAMERA PHONE)
 // =========================================================================
@@ -730,6 +728,7 @@ let lastKeyTime = Date.now();
 
 function initBarcodeScannerHardware() {
   window.addEventListener('keydown', (e) => {
+    if (!e || !e.key) return; // Prevent TypeError: Cannot read properties of undefined (reading 'length')
     const currentTime = Date.now();
     // Inter-keystroke interval for hardware scanners is < 80ms
     if (currentTime - lastKeyTime > 120) {
@@ -759,7 +758,7 @@ function initBarcodeScannerHardware() {
         }
         barcodeBuffer = '';
       }
-    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && document.activeElement !== document.getElementById('txtBarcode')) {
+    } else if (e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && document.activeElement !== document.getElementById('txtBarcode')) {
       // Don't accumulate if user is typing in regular text inputs (unless it's barcode wedge speed)
       const isInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
       if (!isInput || (currentTime - lastKeyTime < 60)) {

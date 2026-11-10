@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const db = require('../db/sqlite-store');
+const sdb = require('../db/supabase-db');
 const CryptoUtils = require('./crypto-utils');
 const config = require('../config');
 
@@ -246,96 +247,79 @@ class JwtAuth {
       }
     }
 
-    // 2. Insert into Supabase cloud database tables via REST API
-    if (isRemote) {
+    // 2. Insert into Supabase cloud database tables via PostgREST Direct Layer
+    let supabaseTenantUuid = null;
+    let supabaseBranchUuid = null;
+    let supabaseRegisterUuid = null;
+
+    if (isRemote && sdb.isConfigured()) {
       try {
         // Tenant
-        await fetch(`${supabaseUrl}/rest/v1/tenants`, {
-          method: 'POST',
-          headers: {
-            'apikey': supabaseKey,
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=minimal'
-          },
-          body: JSON.stringify({
-            id: tenantId,
-            name: businessName,
-            slug: cleanSlug,
-            trade_name: tradeName || businessName,
-            kra_pin: kraPin || 'P050000000Z',
-            phone: phone || '254700000000',
-            email: normalizedEmail,
-            currency: 'KES',
-            plan_id: planId,
-            status: 'TRIAL'
-          })
+        const { data: tData } = await sdb.insert('tenants', {
+          slug: cleanSlug,
+          legal_name: businessName,
+          trade_name: tradeName || businessName,
+          kra_pin: kraPin || 'P050000000Z',
+          business_phone: phone || '254700000000',
+          business_email: normalizedEmail,
+          currency: 'KES',
+          plan_tier: planId,
+          subscription_status: 'ACTIVE',
+          location: location || 'Nairobi'
         });
 
+        if (tData && tData.length > 0) {
+          supabaseTenantUuid = tData[0].id;
+        } else {
+          supabaseTenantUuid = await sdb.resolveTenantUuid(cleanSlug);
+        }
+
         // Branch
-        await fetch(`${supabaseUrl}/rest/v1/branches`, {
-          method: 'POST',
-          headers: {
-            'apikey': supabaseKey,
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=minimal'
-          },
-          body: JSON.stringify({
-            id: branchId,
-            tenant_id: tenantId,
+        if (supabaseTenantUuid) {
+          const { data: bData } = await sdb.insert('branches', {
+            tenant_id: supabaseTenantUuid,
             code: 'MAIN',
             name: branchName || 'Flagship Store',
             location: location || 'Nairobi',
             phone: phone || '254700000000',
             status: 'ACTIVE'
-          })
-        });
+          });
 
-        // Register
-        await fetch(`${supabaseUrl}/rest/v1/registers`, {
-          method: 'POST',
-          headers: {
-            'apikey': supabaseKey,
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=minimal'
-          },
-          body: JSON.stringify({
-            id: registerId,
-            tenant_id: tenantId,
-            branch_id: branchId,
-            code: 'TILL-01',
-            name: 'Counter 1 (Express)',
-            printer_type: 'ESC_POS_80MM',
-            status: 'ONLINE'
-          })
-        });
+          if (bData && bData.length > 0) {
+            supabaseBranchUuid = bData[0].id;
+          }
 
-        // User
-        await fetch(`${supabaseUrl}/rest/v1/users`, {
-          method: 'POST',
-          headers: {
-            'apikey': supabaseKey,
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=minimal'
-          },
-          body: JSON.stringify({
+          // Register
+          if (supabaseBranchUuid) {
+            const { data: rData } = await sdb.insert('registers', {
+              tenant_id: supabaseTenantUuid,
+              branch_id: supabaseBranchUuid,
+              code: 'TILL-01',
+              name: 'Counter 1 (Express)',
+              printer_type: 'ESC_POS_80MM',
+              status: 'ONLINE'
+            });
+            if (rData && rData.length > 0) {
+              supabaseRegisterUuid = rData[0].id;
+            }
+          }
+
+          // User
+          await sdb.insert('users', {
             id: finalUserId,
-            tenant_id: tenantId,
+            tenant_id: supabaseTenantUuid,
             username: normalizedEmail.split('@')[0],
             email: normalizedEmail,
             full_name: fullName || `${businessName} Owner`,
             phone: phone || '254700000000',
             role: 'owner',
-            branch_id: 'ALL',
+            branch_id: supabaseBranchUuid || null,
             pin_code: '1234',
             active: 1
-          })
-        });
+          });
+        }
       } catch (err) {
-        console.warn(`[SUPABASE CLOUD] REST insert notice: ${err.message}`);
+        console.warn(`[SUPABASE CLOUD] PostgREST insert notice: ${err.message}`);
       }
     }
 
@@ -344,11 +328,21 @@ class JwtAuth {
     const trialEnds = new Date(Date.now() + 14 * 86400000).toISOString();
 
     db.transaction(() => {
+      // Insert tenant slug ID
       db.run(
         `INSERT OR REPLACE INTO tenants (id, name, slug, trade_name, kra_pin, phone, email, currency, plan_id, status, trial_ends_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, 'KES', ?, 'TRIAL', ?)`,
         [tenantId, businessName, cleanSlug, tradeName || businessName, kraPin || 'P050000000Z', phone || '254700000000', normalizedEmail, planId, trialEnds]
       );
+
+      // If Supabase created a UUID, also insert UUID alias into tenants so UUID lookups succeed
+      if (supabaseTenantUuid && supabaseTenantUuid !== tenantId) {
+        db.run(
+          `INSERT OR IGNORE INTO tenants (id, name, slug, trade_name, kra_pin, phone, email, currency, plan_id, status, trial_ends_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'KES', ?, 'TRIAL', ?)`,
+          [supabaseTenantUuid, businessName, cleanSlug, tradeName || businessName, kraPin || 'P050000000Z', phone || '254700000000', normalizedEmail, planId, trialEnds]
+        );
+      }
 
       db.run(
         `INSERT OR REPLACE INTO branches (id, tenant_id, code, name, location, phone, status)
@@ -365,7 +359,7 @@ class JwtAuth {
       db.run(
         `INSERT OR REPLACE INTO users (id, tenant_id, username, email, password_hash, password_salt, full_name, phone, role, branch_id, permissions_json, pin_code, active)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'owner', 'ALL', ?, '1234', 1)`,
-        [finalUserId, tenantId, normalizedEmail.split('@')[0], normalizedEmail, hash, salt, fullName || `${businessName} Owner`, phone, JSON.stringify(['ALL_BUSINESS_CONTROL'])]
+        [finalUserId, supabaseTenantUuid || tenantId, normalizedEmail.split('@')[0], normalizedEmail, hash, salt, fullName || `${businessName} Owner`, phone, JSON.stringify(['ALL_BUSINESS_CONTROL'])]
       );
 
       // Clone catalog
