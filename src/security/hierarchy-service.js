@@ -1,3 +1,4 @@
+require('../load-env');
 const db = require('../db/sqlite-store');
 const supabase = require('../db/supabase-client');
 const sdb = require('../db/supabase-db');
@@ -232,6 +233,35 @@ class HierarchyService {
           } catch (e) {
             console.warn('[SUPABASE HIERARCHY] GoTrue existing user update notice:', e.message);
           }
+        }
+
+        // If admin API did not yield a user ID, fallback to regular signup
+        if (!finalUserId || finalUserId === userId) {
+          try {
+            const authRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+              method: 'POST',
+              headers: {
+                'apikey': anonKey || apiKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                email: normalizedEmail,
+                password: password,
+                data: {
+                  full_name: fullName,
+                  role: role,
+                  phone: phone || '',
+                  tenant_id: tenantId,
+                  branch_id: branchUuid || branchId,
+                  pin_code: pinCode
+                }
+              })
+            });
+            const authData = await authRes.json();
+            if (authData && authData.user && authData.user.id) {
+              finalUserId = authData.user.id;
+            }
+          } catch (e) {}
         }
       } else {
         const authRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
@@ -680,7 +710,7 @@ class HierarchyService {
     // Sync to Supabase directly
     const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [creatorTenantId]);
     const supabaseTenantId = await HierarchyService.getSupabaseTenantUuid(creatorTenantId, tenant || {});
-    await HierarchyService.syncUserToSupabase({
+    const syncedUserId = await HierarchyService.syncUserToSupabase({
       userId,
       tenantId: supabaseTenantId,
       branchId: null,
@@ -697,7 +727,7 @@ class HierarchyService {
     return {
       success: true,
       message: `Business Admin ${fullName} successfully created.`,
-      user: { id: userId, fullName, email, role: 'admin' }
+      user: { id: syncedUserId || userId, fullName, email, role: 'admin' }
     };
   }
 
@@ -773,7 +803,7 @@ class HierarchyService {
     // Sync to Supabase directly
     const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [creatorTenantId]);
     const supabaseTenantId = await HierarchyService.getSupabaseTenantUuid(creatorTenantId, tenant || {});
-    await HierarchyService.syncUserToSupabase({
+    const syncedUserId = await HierarchyService.syncUserToSupabase({
       userId,
       tenantId: supabaseTenantId,
       branchId: branchId,
@@ -790,7 +820,7 @@ class HierarchyService {
     return {
       success: true,
       message: `Branch Manager ${fullName} appointed for ${branch.name}.`,
-      user: { id: userId, fullName, email, role: 'branch_manager', branchId }
+      user: { id: syncedUserId || userId, fullName, email, role: 'branch_manager', branchId }
     };
   }
 
@@ -861,7 +891,7 @@ class HierarchyService {
     // Sync to Supabase directly
     const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [creatorTenantId]);
     const supabaseTenantId = await HierarchyService.getSupabaseTenantUuid(creatorTenantId, tenant || {});
-    await HierarchyService.syncUserToSupabase({
+    const syncedUserId = await HierarchyService.syncUserToSupabase({
       userId,
       tenantId: supabaseTenantId,
       branchId: creatorBranchId,
@@ -878,7 +908,7 @@ class HierarchyService {
     return {
       success: true,
       message: `${role.replace(/_/g, ' ').toUpperCase()} ${fullName} successfully appointed.`,
-      user: { id: userId, fullName, email, role, branchId: creatorBranchId }
+      user: { id: syncedUserId || userId, fullName, email, role, branchId: creatorBranchId }
     };
   }
 }
