@@ -1,26 +1,25 @@
+require('../load-env');
 const db = require('../db/sqlite-store');
-const CryptoUtils = require('../security/crypto-utils');
+const sdb = require('../db/supabase-db');
 const sseHub = require('../server/sse-hub');
 const EscPosService = require('../printing/escpos-service');
 const EtimsService = require('../tax/etims-service');
 
 /**
  * Safaricom Daraja 2.0 M-Pesa Payment Engine.
- * Supports STK Push, Callback Processing, Idempotency Guard, and Instant Real-Time Push.
+ * Dual-layer architecture:
+ * High-speed local processing + direct Supabase cloud persistence.
  */
 class MpesaService {
   constructor() {
-    this.consumerKey = process.env.MPESA_CONSUMER_KEY || 'sandbox_consumer_key_2026';
-    this.consumerSecret = process.env.MPESA_CONSUMER_SECRET || 'sandbox_consumer_secret_2026';
-    this.shortcode = process.env.MPESA_SHORTCODE || '174379';
-    this.passkey = process.env.MPESA_PASSKEY || 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919';
-    this.callbackUrl = process.env.MPESA_CALLBACK_URL || 'https://pos.metromart.ke/api/mpesa/callback';
+    this.consumerKey = process.env.MPESA_DEFAULT_CONSUMER_KEY || process.env.MPESA_CONSUMER_KEY || 'sandbox_consumer_key_2026';
+    this.consumerSecret = process.env.MPESA_DEFAULT_CONSUMER_SECRET || process.env.MPESA_CONSUMER_SECRET || 'sandbox_consumer_secret_2026';
+    this.shortcode = process.env.MPESA_DEFAULT_TILL || process.env.MPESA_SHORTCODE || '174379';
+    this.passkey = process.env.MPESA_DEFAULT_PASSKEY || process.env.MPESA_PASSKEY || 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919';
+    this.callbackUrl = process.env.MPESA_CALLBACK_URL || 'https://pos.metromart.ke/api/pos/mpesa/callback';
     this.environment = process.env.MPESA_ENVIRONMENT || 'sandbox';
   }
 
-  /**
-   * Cleans and normalizes phone number to Kenyan international standard (2547XXXXXXXX or 2541XXXXXXXX).
-   */
   static normalizePhoneNumber(phone) {
     if (!phone) return null;
     let cleaned = phone.toString().replace(/[^0-9]/g, '');
@@ -31,15 +30,9 @@ class MpesaService {
     } else if (!cleaned.startsWith('254') && cleaned.length === 9) {
       cleaned = '254' + cleaned;
     }
-    if (cleaned.length === 12 && (cleaned.startsWith('2547') || cleaned.startsWith('2541'))) {
-      return cleaned;
-    }
-    return cleaned; // Fallback
+    return cleaned;
   }
 
-  /**
-   * Generates genuine Safaricom M-Pesa Receipt Code (e.g. QA89DF8921).
-   */
   static generateMpesaReceiptCode() {
     const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
     const numbers = '0123456789';
@@ -51,22 +44,27 @@ class MpesaService {
     return code;
   }
 
-  /**
-   * Initiates an M-Pesa STK Push prompt to the customer's phone using the specific business's Till/Paybill.
-   */
-  initiateStkPush({ tenantId, saleId, customerPhone, amountKes, accountReference = 'Vertext POS' }) {
+  async initiateStkPush({ tenantId, saleId, customerPhone, amountKes, accountReference = 'Vertext POS' }) {
     const normalizedPhone = MpesaService.normalizePhoneNumber(customerPhone);
     if (!normalizedPhone) {
       return { success: false, error: 'INVALID_PHONE', message: 'Valid Kenyan mobile number required (e.g. 0712345678 or 254712345678).' };
     }
 
-    const sale = db.queryOne('SELECT * FROM sales WHERE id = ? AND tenant_id = ?', [saleId, tenantId]);
+    let sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [saleId]);
+    if (!sale && sdb.isConfigured()) {
+      const { data: cs } = await sdb.queryOne('sales', { id: saleId });
+      if (cs) sale = cs;
+    }
     if (!sale) {
       return { success: false, error: 'SALE_NOT_FOUND', message: 'Target sale invoice not found.' };
     }
 
-    // Lookup business profile to use per-business Till / Paybill credentials
-    const tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [tenantId]);
+    let tenant = db.queryOne('SELECT * FROM tenants WHERE id = ?', [tenantId]);
+    if (!tenant && sdb.isConfigured()) {
+      const { data: ct } = await sdb.queryOne('tenants', { id: tenantId });
+      if (ct) tenant = ct;
+    }
+
     const businessShortcode = (tenant && tenant.mpesa_shortcode) || this.shortcode;
     const businessType = (tenant && tenant.mpesa_type) || 'TILL';
     const businessName = (tenant && (tenant.trade_name || tenant.name)) || accountReference || 'Vertext POS';
@@ -75,12 +73,25 @@ class MpesaService {
     const checkoutRequestId = `ws_CO_${Date.now()}_${Math.floor(Math.random() * 900000 + 100000)}`;
     const mpesaTxId = `MPESA-TX-${Date.now()}`;
 
-    // Record pending transaction in DB with specific till attribution
+    // Record pending transaction in local SQLite
     db.run(
       `INSERT INTO mpesa_transactions (id, tenant_id, merchant_request_id, checkout_request_id, sale_id, customer_phone, amount_kes, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')`,
       [mpesaTxId, tenantId, merchantRequestId, checkoutRequestId, saleId, normalizedPhone, Number(amountKes)]
     );
+
+    // Also push to Supabase Cloud
+    if (sdb.isConfigured()) {
+      sdb.insert('mpesa_transactions', {
+        tenant_id: tenantId,
+        merchant_request_id: merchantRequestId,
+        checkout_request_id: checkoutRequestId,
+        sale_id: sale.id,
+        customer_phone: normalizedPhone,
+        amount_kes: Number(amountKes),
+        status: 'PENDING'
+      }).catch(() => {});
+    }
 
     console.log(`[M-PESA DARAJA] STK Push dispatched to ${normalizedPhone} for KES ${amountKes} via ${businessName} [Till/Shortcode: ${businessShortcode} (${businessType})] (CheckoutReq: ${checkoutRequestId})`);
 
@@ -98,10 +109,7 @@ class MpesaService {
     };
   }
 
-  /**
-   * Processes official Safaricom Daraja Webhook Callback with strict idempotency.
-   */
-  processCallback(callbackPayload) {
+  async processCallback(callbackPayload) {
     if (!callbackPayload || !callbackPayload.Body || !callbackPayload.Body.stkCallback) {
       return { success: false, error: 'MALFORMED_CALLBACK', message: 'Invalid callback format' };
     }
@@ -111,8 +119,13 @@ class MpesaService {
     const resultCode = stk.ResultCode;
     const resultDesc = stk.ResultDesc;
 
-    // 1. Idempotency Guard: Check if transaction exists and not already processed
-    const tx = db.queryOne('SELECT * FROM mpesa_transactions WHERE checkout_request_id = ?', [checkoutRequestId]);
+    // 1. Idempotency Guard: Check if transaction exists
+    let tx = db.queryOne('SELECT * FROM mpesa_transactions WHERE checkout_request_id = ?', [checkoutRequestId]);
+    if (!tx && sdb.isConfigured()) {
+      const { data: ctx } = await sdb.queryOne('mpesa_transactions', { checkout_request_id: checkoutRequestId });
+      if (ctx) tx = ctx;
+    }
+
     if (!tx) {
       console.warn(`[M-PESA DARAJA] Callback received for unknown CheckoutRequestID: ${checkoutRequestId}`);
       return { success: false, error: 'UNKNOWN_CHECKOUT_ID' };
@@ -120,13 +133,13 @@ class MpesaService {
 
     if (tx.status === 'COMPLETED' || tx.status === 'FAILED') {
       console.log(`[M-PESA DARAJA] Duplicate callback ignored for CheckoutRequestID: ${checkoutRequestId}`);
-      const sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [tx.sale_id]);
+      let sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [tx.sale_id]);
       return {
         success: tx.status === 'COMPLETED',
         status: tx.status,
         saleId: tx.sale_id,
         mpesaReceipt: tx.mpesa_receipt || (sale ? sale.mpesa_code : null),
-        amount: tx.amount_kes,
+        amount: Number(tx.amount_kes),
         message: 'Duplicate callback ignored idempotently.'
       };
     }
@@ -134,7 +147,7 @@ class MpesaService {
     // 2. Handle Payment Success (ResultCode === 0)
     if (resultCode === 0) {
       let mpesaReceipt = MpesaService.generateMpesaReceiptCode();
-      let paidAmount = tx.amount_kes;
+      let paidAmount = Number(tx.amount_kes);
       let transactionDate = new Date().toISOString();
 
       if (stk.CallbackMetadata && stk.CallbackMetadata.Item) {
@@ -145,14 +158,14 @@ class MpesaService {
         }
       }
 
-      // Execute DB state finalization inside an atomic transaction
+      // Execute DB state finalization inside local SQLite transaction
       db.transaction(() => {
         // A. Update M-Pesa record
         db.run(
           `UPDATE mpesa_transactions
            SET status = 'COMPLETED', mpesa_receipt = ?, result_code = 0, result_desc = ?, callback_payload = ?, completed_at = ?
-           WHERE id = ?`,
-          [mpesaReceipt, resultDesc, JSON.stringify(callbackPayload), new Date().toISOString(), tx.id]
+           WHERE checkout_request_id = ?`,
+          [mpesaReceipt, resultDesc, JSON.stringify(callbackPayload), new Date().toISOString(), checkoutRequestId]
         );
 
         // B. Mark target Sale as COMPLETED
@@ -203,6 +216,24 @@ class MpesaService {
           }
         }
       });
+
+      // Also update Supabase Cloud
+      if (sdb.isConfigured()) {
+        sdb.update('mpesa_transactions', { checkout_request_id: checkoutRequestId }, {
+          status: 'COMPLETED',
+          mpesa_receipt: mpesaReceipt,
+          result_code: 0,
+          result_desc: resultDesc,
+          callback_payload: JSON.stringify(callbackPayload),
+          completed_at: new Date().toISOString()
+        }).catch(() => {});
+
+        sdb.update('sales', { id: tx.sale_id }, {
+          status: 'COMPLETED',
+          payment_method: 'MPESA',
+          mpesa_code: mpesaReceipt
+        }).catch(() => {});
+      }
 
       console.log(`[M-PESA DARAJA] PAYMENT VERIFIED! Receipt: ${mpesaReceipt}, Amount: KES ${paidAmount}`);
 
@@ -288,8 +319,8 @@ class MpesaService {
       db.run(
         `UPDATE mpesa_transactions
          SET status = 'FAILED', result_code = ?, result_desc = ?, callback_payload = ?, completed_at = ?
-         WHERE id = ?`,
-        [resultCode, resultDesc, JSON.stringify(callbackPayload), new Date().toISOString(), tx.id]
+         WHERE checkout_request_id = ?`,
+        [resultCode, resultDesc, JSON.stringify(callbackPayload), new Date().toISOString(), checkoutRequestId]
       );
 
       console.warn(`[M-PESA DARAJA] Payment Failed for ${tx.customer_phone}: [Code ${resultCode}] ${resultDesc}`);
@@ -320,11 +351,12 @@ class MpesaService {
     }
   }
 
-  /**
-   * Developer / Simulation Helper: Simulates customer entering PIN on phone
-   */
-  simulateCustomerPinConfirmation(checkoutRequestId, { mpesaReceipt = null, willSucceed = true } = {}) {
-    const tx = db.queryOne('SELECT * FROM mpesa_transactions WHERE checkout_request_id = ?', [checkoutRequestId]);
+  async simulateCustomerPinConfirmation(checkoutRequestId, { mpesaReceipt = null, willSucceed = true } = {}) {
+    let tx = db.queryOne('SELECT * FROM mpesa_transactions WHERE checkout_request_id = ?', [checkoutRequestId]);
+    if (!tx && sdb.isConfigured()) {
+      const { data: ctx } = await sdb.queryOne('mpesa_transactions', { checkout_request_id: checkoutRequestId });
+      if (ctx) tx = ctx;
+    }
     if (!tx) return { success: false, message: 'Transaction not found' };
 
     const receipt = mpesaReceipt || MpesaService.generateMpesaReceiptCode();
@@ -354,4 +386,3 @@ class MpesaService {
 }
 
 module.exports = new MpesaService();
-

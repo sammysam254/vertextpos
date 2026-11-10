@@ -1,4 +1,6 @@
+require('../load-env');
 const db = require('../db/sqlite-store');
+const sdb = require('../db/supabase-db');
 const JwtAuth = require('../security/jwt-auth');
 const HierarchyService = require('../security/hierarchy-service');
 const SaasPosService = require('../pos/saas-pos-service');
@@ -7,11 +9,9 @@ const EscPosService = require('../printing/escpos-service');
 const EtimsService = require('../tax/etims-service');
 const sseHub = require('./sse-hub');
 const AuditLogger = require('../security/audit-logger');
-const biometricAdapter = require('../biometric/biometric-adapter');
 
 class SaasRouter {
   static async handle(req, res, pathname, query, body) {
-    // Check if this is an SSE connection
     if (pathname === '/api/events' && req.method === 'GET') {
       sseHub.addClient(res, req);
       return;
@@ -34,7 +34,7 @@ class SaasRouter {
         });
       }
 
-      // 2. Authentication & Direct Supabase Account Provisioning
+      // 2. Authentication
       if (pathname === '/api/auth/register-tenant' && req.method === 'POST') {
         const result = await JwtAuth.registerTenant(body);
         return this.sendJson(res, result.success ? 201 : 400, result);
@@ -53,7 +53,11 @@ class SaasRouter {
 
       // Live Cloud / Supabase Sync Status
       if (pathname === '/api/sync/status' && req.method === 'GET') {
-        const pendingCount = db.queryOne("SELECT COUNT(id) as count FROM offline_sync_queue WHERE status = 'PENDING'").count;
+        let pendingCount = 0;
+        try {
+          pendingCount = db.queryOne("SELECT COUNT(id) as count FROM offline_sync_queue WHERE status = 'PENDING'").count;
+        } catch (e) {}
+
         const hasSupabase = !!(process.env.SUPABASE_URL && (process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY));
         return this.sendJson(res, 200, {
           database: 'sqlite_local',
@@ -81,17 +85,13 @@ class SaasRouter {
           [ctx.branchId || 'BR-001', tenantId, pattern, pattern, pattern]
         );
 
-        const supabaseUrl = process.env.SUPABASE_URL;
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
-        if ((!products || products.length === 0) && supabaseUrl && supabaseKey) {
+        if ((!products || products.length === 0) && sdb.isConfigured()) {
           try {
-            const sRes = await fetch(`${supabaseUrl}/rest/v1/products?or=(barcode.ilike.*${encodeURIComponent(q)}*,sku.ilike.*${encodeURIComponent(q)}*,name.ilike.*${encodeURIComponent(q)}*)&limit=12`, {
-              headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+            const { data: sups } = await sdb.query('products', { is_active: true }, {
+              orFilters: `barcode.ilike.*${encodeURIComponent(q)}*,sku.ilike.*${encodeURIComponent(q)}*,name.ilike.*${encodeURIComponent(q)}*`,
+              limit: 12
             });
-            if (sRes.ok) {
-              const sups = await sRes.json();
-              if (sups && sups.length > 0) products = sups;
-            }
+            if (sups && sups.length > 0) products = sups;
           } catch (e) {}
         }
         return this.sendJson(res, 200, { products });
@@ -103,26 +103,13 @@ class SaasRouter {
         let tx = db.queryOne('SELECT * FROM mpesa_transactions WHERE sale_id = ? ORDER BY created_at DESC LIMIT 1', [saleId]);
         let sale = db.queryOne('SELECT * FROM sales WHERE id = ?', [saleId]);
 
-        // Direct Cloud Query to Supabase PostgREST
-        const supabaseUrl = process.env.SUPABASE_URL;
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
-        if (supabaseUrl && supabaseKey && (!sale || sale.status !== 'COMPLETED')) {
+        if (sdb.isConfigured() && (!sale || sale.status !== 'COMPLETED')) {
           try {
-            const mpesaRes = await fetch(`${supabaseUrl}/rest/v1/mpesa_transactions?sale_id=eq.${encodeURIComponent(saleId)}&order=created_at.desc&limit=1`, {
-              headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
-            });
-            if (mpesaRes.ok) {
-              const rows = await mpesaRes.json();
-              if (rows && rows.length > 0) tx = rows[0];
-            }
+            const { data: mRows } = await sdb.query('mpesa_transactions', { sale_id: saleId }, { order: 'created_at.desc', limit: 1 });
+            if (mRows && mRows.length > 0) tx = mRows[0];
 
-            const saleRes = await fetch(`${supabaseUrl}/rest/v1/sales?id=eq.${encodeURIComponent(saleId)}&limit=1`, {
-              headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
-            });
-            if (saleRes.ok) {
-              const sRows = await saleRes.json();
-              if (sRows && sRows.length > 0) sale = sRows[0];
-            }
+            const { data: sRows } = await sdb.query('sales', { id: saleId }, { limit: 1 });
+            if (sRows && sRows.length > 0) sale = sRows[0];
           } catch (e) {}
         }
 
@@ -165,21 +152,14 @@ class SaasRouter {
         });
       }
 
-      // 4. Products Catalog (Kenyan FMCG with Direct Supabase Cloud Sync)
+      // 4. Products Catalog
       if (pathname === '/api/products' && req.method === 'GET') {
         let products = db.queryAll('SELECT * FROM products WHERE tenant_id = ? AND is_active = 1', [tenantId]);
-        
-        const supabaseUrl = process.env.SUPABASE_URL;
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
-        if ((!products || products.length === 0) && supabaseUrl && supabaseKey) {
+
+        if ((!products || products.length === 0) && sdb.isConfigured()) {
           try {
-            const sRes = await fetch(`${supabaseUrl}/rest/v1/products?is_active=eq.true&order=name.asc`, {
-              headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
-            });
-            if (sRes.ok) {
-              const sups = await sRes.json();
-              if (sups && sups.length > 0) products = sups;
-            }
+            const { data: sups } = await sdb.query('products', { is_active: true }, { order: 'name.asc' });
+            if (sups && sups.length > 0) products = sups;
           } catch (e) {}
         }
         return this.sendJson(res, 200, { products });
@@ -194,33 +174,19 @@ class SaasRouter {
           [prodId, tenantId, name, barcode, sku || barcode, category || 'General', unit || 'PCS', costPriceKes || 0, sellingPriceKes || 0, vatRate !== undefined ? vatRate : 16.0]
         );
 
-        // Sync directly to Supabase products table
-        const supabaseUrl = process.env.SUPABASE_URL;
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
-        if (supabaseUrl && supabaseKey) {
-          try {
-            fetch(`${supabaseUrl}/rest/v1/products`, {
-              method: 'POST',
-              headers: {
-                'apikey': supabaseKey,
-                'Authorization': `Bearer ${supabaseKey}`,
-                'Content-Type': 'application/json',
-                'Prefer': 'return=minimal'
-              },
-              body: JSON.stringify({
-                name,
-                barcode,
-                sku: sku || barcode,
-                category: category || 'General',
-                unit: unit || 'PCS',
-                cost_price_kes: costPriceKes || 0,
-                selling_price_kes: sellingPriceKes || 0,
-                vat_rate: vatRate !== undefined ? vatRate : 16.0,
-                is_active: true
-              })
-            }).catch(() => {});
-          } catch (e) {}
-        }
+        // Sync directly to Supabase
+        sdb.insert('products', {
+          tenant_id: tenantId,
+          name,
+          barcode,
+          sku: sku || barcode,
+          category: category || 'General',
+          unit: unit || 'PCS',
+          cost_price_kes: costPriceKes || 0,
+          selling_price_kes: sellingPriceKes || 0,
+          vat_rate: vatRate !== undefined ? vatRate : 16.0,
+          is_active: true
+        }).catch(() => {});
 
         return this.sendJson(res, 201, { success: true, productId: prodId });
       }
@@ -234,7 +200,7 @@ class SaasRouter {
       // 6. POS Checkout Operations
       if (pathname === '/api/pos/sale/new' && req.method === 'POST') {
         const { branchId, registerId, cashierId, customerId } = body;
-        const sale = SaasPosService.createSale({
+        const sale = await SaasPosService.createSale({
           tenantId,
           branchId: branchId || ctx.branchId || 'BR-001',
           registerId: registerId || ctx.registerId || 'REG-01',
@@ -246,7 +212,7 @@ class SaasRouter {
 
       if (pathname.match(/^\/api\/pos\/sale\/([^/]+)$/) && req.method === 'GET') {
         const saleId = pathname.split('/')[4];
-        const sale = SaasPosService.getSaleById(tenantId, saleId);
+        const sale = await SaasPosService.getSaleById(tenantId, saleId);
         if (!sale) return this.sendJson(res, 404, { error: 'NOT_FOUND', message: 'Sale not found' });
         return this.sendJson(res, 200, { sale });
       }
@@ -254,7 +220,7 @@ class SaasRouter {
       if (pathname.match(/^\/api\/pos\/sale\/([^/]+)\/item$/) && req.method === 'POST') {
         const saleId = pathname.split('/')[4];
         const { barcodeOrId, quantity, pricingTier } = body;
-        const result = SaasPosService.addItemToCart({
+        const result = await SaasPosService.addItemToCart({
           tenantId,
           saleId,
           barcodeOrId,
@@ -268,7 +234,7 @@ class SaasRouter {
       if (pathname.match(/^\/api\/pos\/sale\/([^/]+)\/cash$/) && req.method === 'POST') {
         const saleId = pathname.split('/')[4];
         const { cashTenderedKes, cashierName } = body;
-        const result = SaasPosService.tenderCashPayment({
+        const result = await SaasPosService.tenderCashPayment({
           tenantId,
           saleId,
           cashTenderedKes,
@@ -280,7 +246,7 @@ class SaasRouter {
       // 8. Safaricom M-Pesa Daraja STK Push & Callbacks
       if (pathname === '/api/mpesa/stk-push' && req.method === 'POST') {
         const { saleId, customerPhone, amountKes } = body;
-        const result = mpesaService.initiateStkPush({
+        const result = await mpesaService.initiateStkPush({
           tenantId,
           saleId,
           customerPhone,
@@ -289,24 +255,27 @@ class SaasRouter {
         return this.sendJson(res, result.success ? 200 : 400, result);
       }
 
-      // Public Webhook callback from Safaricom Daraja
       if (pathname === '/api/mpesa/callback' && req.method === 'POST') {
-        const result = mpesaService.processCallback(body);
+        const result = await mpesaService.processCallback(body);
         return this.sendJson(res, 200, result);
       }
 
-      // Developer / Demo Simulator for customer entering M-Pesa PIN
+      if (pathname === '/api/pos/mpesa/callback' && req.method === 'POST') {
+        const result = await mpesaService.processCallback(body);
+        return this.sendJson(res, 200, result);
+      }
+
       if (pathname === '/api/mpesa/simulate-pin' && req.method === 'POST') {
         const { checkoutRequestId, willSucceed } = body;
-        const result = mpesaService.simulateCustomerPinConfirmation(checkoutRequestId, { willSucceed });
+        const result = await mpesaService.simulateCustomerPinConfirmation(checkoutRequestId, { willSucceed });
         return this.sendJson(res, result.success ? 200 : 400, result);
       }
 
-      // 9. Suspended Sales / Queue Management (Supervisor Protected)
+      // 9. Suspended Sales
       if (pathname.match(/^\/api\/pos\/sale\/([^/]+)\/suspend$/) && req.method === 'POST') {
         const saleId = pathname.split('/')[4];
         const { supervisorId, reason } = body;
-        const result = SaasPosService.suspendSale({
+        const result = await SaasPosService.suspendSale({
           tenantId,
           saleId,
           supervisorId: supervisorId || 'usr_superv_01',
@@ -318,7 +287,7 @@ class SaasRouter {
       if (pathname.match(/^\/api\/pos\/sale\/([^/]+)\/resume$/) && req.method === 'POST') {
         const saleId = pathname.split('/')[4];
         const { supervisorId } = body;
-        const result = SaasPosService.resumeSale({
+        const result = await SaasPosService.resumeSale({
           tenantId,
           saleId,
           supervisorId: supervisorId || 'usr_superv_01'
@@ -328,11 +297,11 @@ class SaasRouter {
 
       if (pathname === '/api/pos/suspended' && req.method === 'GET') {
         const branchId = query.branchId || null;
-        const suspendedSales = SaasPosService.getSuspendedSales(tenantId, branchId);
+        const suspendedSales = await SaasPosService.getSuspendedSales(tenantId, branchId);
         return this.sendJson(res, 200, { suspendedSales, suspendedTransactions: suspendedSales });
       }
 
-      // 10. Cashier Shifts & Cash Reconciliation
+      // 10. Cashier Shifts
       if (pathname === '/api/shifts/active' && req.method === 'GET') {
         const registerId = query.registerId || ctx.registerId || 'REG-01';
         const shift = db.queryOne(
@@ -356,7 +325,7 @@ class SaasRouter {
 
       if (pathname === '/api/shifts/close' && req.method === 'POST') {
         const { shiftId, closingCashKes, notes, approvedBy } = body;
-        const result = SaasPosService.closeShift({
+        const result = await SaasPosService.closeShift({
           tenantId,
           shiftId,
           closingCashKes,
@@ -421,7 +390,7 @@ class SaasRouter {
         return this.sendJson(res, result.success ? 201 : 400, result);
       }
 
-      // Per-Business M-Pesa Daraja & Branding Configuration (Super Admin & Owner)
+      // Per-Business M-Pesa Daraja & Branding Configuration
       if (pathname === '/api/hierarchy/configure-daraja' && req.method === 'POST') {
         const { targetTenantId, tenantId: bodyTenantId, mpesaShortcode, mpesaPasskey, mpesaConsumerKey, mpesaConsumerSecret, mpesaType, receiptHeaderMsg, receiptFooterMsg } = body;
         const effectiveTenantId = targetTenantId || bodyTenantId || tenantId;
@@ -442,7 +411,7 @@ class SaasRouter {
         });
       }
 
-      // Business Configuration Settings & Logo Upload (Super Admin & Owner)
+      // Business Settings
       if (pathname === '/api/tenant/settings' && req.method === 'GET') {
         const targetTenantId = query.tenantId || tenantId;
         const tenantProfile = db.queryOne('SELECT * FROM tenants WHERE id = ?', [targetTenantId]);
@@ -475,7 +444,6 @@ class SaasRouter {
           [updatedName, updatedTradeName, updatedKraPin, updatedPhone, updatedEmail, updatedLocation, updatedHeader, updatedFooter, updatedLogo, updatedSubFee, effectiveTenantId]
         );
 
-        // Update default branch location & phone if changed
         db.run('UPDATE branches SET location = ?, phone = ? WHERE tenant_id = ?', [updatedLocation, updatedPhone, effectiveTenantId]);
 
         const updated = db.queryOne('SELECT * FROM tenants WHERE id = ?', [effectiveTenantId]);
@@ -505,7 +473,7 @@ class SaasRouter {
         return this.sendJson(res, 200, dashboardData);
       }
 
-      // 13. Reporting & Dashboard Analytics
+      // 13. Reports Dashboard
       if (pathname === '/api/reports/dashboard' && req.method === 'GET') {
         const salesStats = db.queryOne(`
           SELECT 
@@ -531,10 +499,10 @@ class SaasRouter {
         });
       }
 
-      // 12. ESC/POS Receipt Preview & Public Online Digital Receipt
+      // Receipt Preview
       if (pathname.match(/^\/api\/printing\/receipt\/([^/]+)$/) && req.method === 'GET') {
         const saleId = pathname.split('/')[4];
-        const sale = SaasPosService.getSaleById(tenantId, saleId) || SaasPosService.getSaleById(null, saleId);
+        const sale = await SaasPosService.getSaleById(tenantId, saleId) || await SaasPosService.getSaleById(null, saleId);
         if (!sale) return this.sendJson(res, 404, { error: 'NOT_FOUND', message: `Sale ${saleId} not found` });
 
         const effectiveTenantId = sale.tenant_id || tenantId;
@@ -593,10 +561,10 @@ class SaasRouter {
         return this.sendJson(res, 200, receipt);
       }
 
-      // 13. Public Mobile Online Digital Receipt Viewer (Scanned from Receipt QR Code)
+      // Public Online Digital Receipt Viewer
       if ((pathname.match(/^\/receipt\/([^/]+)$/) || pathname.match(/^\/api\/receipt\/(?:view\/)?([^/]+)$/)) && req.method === 'GET') {
         const saleId = pathname.split('/').pop();
-        const sale = SaasPosService.getSaleById(null, saleId);
+        const sale = await SaasPosService.getSaleById(null, saleId);
         if (!sale) {
           res.statusCode = 404;
           res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -702,7 +670,6 @@ class SaasRouter {
         `);
       }
 
-      // 404
       return this.sendJson(res, 404, { error: 'NOT_FOUND', message: `Route ${pathname} not found` });
     } catch (err) {
       console.error('API Error:', err);

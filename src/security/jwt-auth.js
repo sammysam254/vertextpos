@@ -191,11 +191,14 @@ class JwtAuth {
           authSession = authData.session || null;
           console.log(`[SUPABASE AUTH] Successfully registered user ${normalizedEmail} with Supabase UID: ${finalUserId}`);
         } else if (authData && authData.error_code === 'user_already_exists') {
-          return {
-            success: false,
-            error: 'USER_EXISTS',
-            message: 'An account with this email already exists in Supabase. Please sign in.'
-          };
+          supabaseAuthSuccess = true;
+          console.log(`[SUPABASE AUTH] User ${normalizedEmail} already registered in Supabase. Proceeding.`);
+          try {
+            const { data: existingUsers } = await sdb.query('users', { email: normalizedEmail });
+            if (existingUsers && existingUsers.length > 0) {
+              finalUserId = existingUsers[0].id;
+            }
+          } catch (e) {}
         } else if (authData && (authData.msg || authData.message)) {
           console.warn(`[SUPABASE AUTH] Registration notice: ${authData.msg || authData.message}`);
           if (authRes.status >= 400 && !authData.id) {

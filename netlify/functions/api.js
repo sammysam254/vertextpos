@@ -1,6 +1,8 @@
 /**
  * Netlify Serverless API Gateway for VERTEXT POS SaaS
+ * Powered by Supabase Cloud Database & GoTrue Authentication
  */
+require('../../src/load-env');
 const SaasRouter = require('../../src/server/saas-router');
 const ApiRouter = require('../../src/server/router');
 const { seedSaasData } = require('../../src/db/saas-seed');
@@ -14,6 +16,7 @@ function ensureInitialized() {
       seedDatabase();
       seedSaasData();
       isInitialized = true;
+      console.log('[NETLIFY] Gateway initialized with Supabase Cloud connection');
     } catch (e) {
       console.warn('Initialization notice:', e.message);
     }
@@ -42,7 +45,6 @@ exports.handler = async (event, context) => {
 
   const query = event.queryStringParameters || {};
 
-  // Mock res object to capture SaasRouter response
   return new Promise((resolve) => {
     let statusCode = 200;
     const responseHeaders = {
@@ -111,4 +113,3 @@ exports.handler = async (event, context) => {
     }
   });
 };
-
