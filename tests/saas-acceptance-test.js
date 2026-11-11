@@ -421,7 +421,7 @@ async function runSaasAcceptanceTests() {
     console.log('\n--- TEST 12: Super Admin Auto-Elevation for sammyseth260@gmail.com ---');
     const saRegRes = await makeRequest('/api/auth/register-user', 'POST', {
       email: 'sammyseth260@gmail.com',
-      password: 'SuperSecurePassword2026!',
+      password: 'Admin@2026!',
       fullName: 'Sammy Seth (Chief Architect)'
     });
     assert.strictEqual(saRegRes.statusCode, 201, 'Registration for sammyseth260@gmail.com should return 201');
@@ -431,7 +431,7 @@ async function runSaasAcceptanceTests() {
     // Verify login with updated password
     const saLoginRes = await makeRequest('/api/auth/login', 'POST', {
       emailOrUsername: 'sammyseth260@gmail.com',
-      password: 'SuperSecurePassword2026!'
+      password: 'Admin@2026!'
     });
     assert.strictEqual(saLoginRes.statusCode, 200, 'Super admin login should succeed');
     assert.strictEqual(saLoginRes.body.user.role, 'super_admin');

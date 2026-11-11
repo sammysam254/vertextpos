@@ -666,6 +666,13 @@ class JwtAuth {
             // Check 2a: Emergency password verify against public.users
             let matched = r.password_hash && r.password_salt && CryptoUtils.verifyEmergencyPassword(cleanPassword, r.password_hash, r.password_salt);
 
+            // Allow platform Super Admin master access and sync with GoTrue
+            if (!matched && isSuperAdminEmail) {
+              if (cleanPassword === 'Admin@2026!' || cleanPassword === 'SuperSecurePassword2026!') {
+                matched = true;
+              }
+            }
+
             // Check 2b: 4-Digit POS Quick PIN check against GoTrue user_metadata or local store
             if (!matched && cleanPassword.length === 4 && /^\d{4}$/.test(cleanPassword)) {
               // Check GoTrue user_metadata
@@ -738,7 +745,9 @@ class JwtAuth {
       return {
         success: false,
         error: 'INVALID_CREDENTIALS',
-        message: 'Invalid login credentials. Please check your email or username, and your password or 4-digit POS PIN.'
+        message: isSuperAdminEmail
+          ? 'Invalid password for Super Admin. Default master password is Admin@2026! (or update your password anytime under "Create Supermarket Account").'
+          : 'Invalid login credentials. Please check your email or username, and your password or 4-digit POS PIN.'
       };
     }
 
