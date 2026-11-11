@@ -2262,13 +2262,15 @@ body {
   }
 
   .app-main-stage {
-    flex: 1 !important;
+    flex: 1 1 0% !important;
     display: flex !important;
     flex-direction: column !important;
     height: 100vh !important;
+    max-height: 100vh !important;
     width: auto !important;
     max-width: none !important;
     min-width: 0 !important;
+    min-height: 0 !important;
     overflow: hidden !important;
     background-color: #f1f5f9 !important;
   }
@@ -2281,19 +2283,64 @@ body {
     flex-wrap: nowrap !important;
     align-items: center !important;
     justify-content: space-between !important;
+    gap: 16px !important;
+    flex-shrink: 0 !important;
+  }
+
+  .topbar-left {
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    flex-shrink: 0 !important;
+  }
+
+  .topbar-title-box {
+    display: flex !important;
+    flex-direction: column !important;
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+  }
+
+  .topbar-title {
+    font-size: 1.05rem !important;
+    font-weight: 800 !important;
+    white-space: nowrap !important;
   }
 
   .topbar-breadcrumbs {
     display: block !important;
+    font-size: 0.72rem !important;
+    white-space: nowrap !important;
   }
 
   .stage-content {
-    flex: 1 !important;
+    flex: 1 1 0% !important;
+    min-height: 0 !important;
+    height: calc(100vh - 60px) !important;
+    max-height: calc(100vh - 60px) !important;
     overflow-y: auto !important;
-    padding: 24px !important;
+    overflow-x: hidden !important;
+    padding: 20px 24px 80px 24px !important;
     width: 100% !important;
     max-width: none !important;
-    height: auto !important;
+    box-sizing: border-box !important;
+    -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-y !important;
+  }
+
+  .stage-content::-webkit-scrollbar {
+    width: 8px !important;
+  }
+  .stage-content::-webkit-scrollbar-track {
+    background: #e2e8f0 !important;
+    border-radius: 4px !important;
+  }
+  .stage-content::-webkit-scrollbar-thumb {
+    background: #94a3b8 !important;
+    border-radius: 4px !important;
+  }
+  .stage-content::-webkit-scrollbar-thumb:hover {
+    background: #64748b !important;
   }
 
   .pos-grid {

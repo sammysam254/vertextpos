@@ -148,7 +148,18 @@ class SaasRouter {
           products = allProds;
         }
 
-        return this.sendJson(res, 200, { products: products || [] });
+        // Deduplicate by barcode & name to guarantee zero duplicate rows
+        const seen = new Set();
+        const uniqueProds = [];
+        for (const p of (products || [])) {
+          const key = (p.barcode || p.name || p.id).toString().trim().toLowerCase();
+          if (!seen.has(key)) {
+            seen.add(key);
+            uniqueProds.push(p);
+          }
+        }
+
+        return this.sendJson(res, 200, { products: uniqueProds });
       }
 
       if (pathname === '/api/products' && req.method === 'POST') {
@@ -533,7 +544,7 @@ class SaasRouter {
         const filters = { status: 'COMPLETED' };
         if (tenantUuid) filters.tenant_id = tenantUuid;
 
-        const { data: completedSales } = await sdb.query('sales', filters);
+        const { data: completedSales } = await sdb.query('sales', filters, { order: 'created_at.desc', limit: 25 });
         const salesList = completedSales || [];
 
         const totalRevenueKes = salesList.reduce((sum, s) => sum + Number(s.total_kes || 0), 0);
@@ -551,7 +562,8 @@ class SaasRouter {
           transactionCount: salesList.length,
           cashRevenueKes,
           mpesaRevenueKes,
-          lowStockCount
+          lowStockCount,
+          recentSales: salesList
         });
       }
 

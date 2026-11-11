@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <title>Vertext POS — SaaS Retail Enterprise Platform (KES)</title>
-  <link rel="stylesheet" href="styles.css?v=3.7">
+  <link rel="stylesheet" href="styles.css?v=3.8">
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -821,7 +821,7 @@
         <!-- =================================================================== -->
         <!-- ROLE 9: ACCOUNTANT DASHBOARD                                        -->
         <!-- =================================================================== -->
-        <section id="viewAccountsDashboard" class="role-view-panel">
+        <section id="viewAccountantDashboard" class="role-view-panel">
           <div class="content-header-bar">
             <div>
               <h3>Retail Accounting &amp; KRA Tax Reconciliation</h3>
@@ -1261,7 +1261,10 @@
         <section id="viewReports" class="role-view-panel">
           <div class="content-card">
             <div class="card-head">
-              <h4>Daily Financial Performance &amp; Settlement (KES)</h4>
+              <div>
+                <h4>Daily Financial Performance &amp; Settlement (KES)</h4>
+                <p class="section-subtitle">Real-time revenue settlements, Safaricom Daraja M-Pesa receipts, and KRA fiscal compliance.</p>
+              </div>
               <button class="btn btn-outline" onclick="window.loadDashboardReports()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                 Refresh Metrics
@@ -1271,7 +1274,7 @@
             <div class="reports-kpi-grid">
               <div class="kpi-card">
                 <div class="kpi-title">TODAY'S GROSS REVENUE</div>
-                <div class="kpi-value" id="kpiTotalRevenue">KES 0.00</div>
+                <div class="kpi-value text-primary" id="kpiTotalRevenue">KES 0.00</div>
               </div>
               <div class="kpi-card">
                 <div class="kpi-title">M-PESA PAYMENTS (DARAJA)</div>
@@ -1284,6 +1287,31 @@
               <div class="kpi-card">
                 <div class="kpi-title">TRANSACTIONS COMPLETED</div>
                 <div class="kpi-value" id="kpiTxCount">0</div>
+              </div>
+            </div>
+
+            <!-- Daily Transactions & Settlement Ledger Table -->
+            <div class="content-card mt-4" style="border:none; padding:12px 0 0 0;">
+              <div class="card-head">
+                <h4>Audited Retail Sales &amp; Settlement Ledger</h4>
+              </div>
+              <div class="table-responsive">
+                <table class="saas-table">
+                  <thead>
+                    <tr>
+                      <th>Sale ID / Receipt</th>
+                      <th>Timestamp</th>
+                      <th>Payment Channel</th>
+                      <th>Items Sold</th>
+                      <th>Total Amount (KES)</th>
+                      <th>Tax / VAT</th>
+                      <th>KRA Fiscal Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dailyReportsTableBody">
+                    <tr><td colspan="7" class="text-center" style="padding:24px; color:#64748b;">Loading sales ledger...</td></tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
@@ -2149,6 +2177,6 @@
   </div>
 
   <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
-  <script src="saas-app.js?v=3.7"></script>
+  <script src="saas-app.js?v=3.8"></script>
 </body>
 </html>

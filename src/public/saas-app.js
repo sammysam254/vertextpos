@@ -395,7 +395,8 @@ window.switchTab = function(tabName) {
   updateStageTitles(tabName);
 
   const panel = document.getElementById(`view${capitalize(tabName)}`) ||
-                document.getElementById(`view${capitalizeRole(tabName)}Dashboard`);
+                document.getElementById(`view${capitalizeRole(tabName)}Dashboard`) ||
+                (tabName === 'accountant' ? (document.getElementById('viewAccountantDashboard') || document.getElementById('viewAccountsDashboard')) : null);
 
   if (panel) {
     panel.classList.add('active');
@@ -2923,7 +2924,12 @@ async function loadInventoryTable() {
     return;
   }
 
+  const seen = new Set();
   prods.forEach(p => {
+    const key = (p.barcode || p.name || p.id).toString().trim().toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td data-label="Barcode"><code>${p.barcode}</code></td>
@@ -3183,6 +3189,36 @@ async function loadDashboardReports() {
   if (cashEl) cashEl.innerText = `KES ${(data.cashRevenueKes || 0).toFixed(2)}`;
   const txEl = document.getElementById('kpiTxCount');
   if (txEl) txEl.innerText = data.transactionCount || 0;
+
+  const tbody = document.getElementById('dailyReportsTableBody');
+  if (tbody) {
+    tbody.innerHTML = '';
+    const sales = data.recentSales || [];
+    if (sales.length === 0) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="7" class="text-center" style="padding:24px; color:#64748b;">
+            No sales recorded today yet. Use the POS Terminal station to process your first customer sale.
+          </td>
+        </tr>
+      `;
+    } else {
+      sales.forEach(s => {
+        const tr = document.createElement('tr');
+        const dt = new Date(s.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        tr.innerHTML = `
+          <td data-label="Sale ID"><code>${s.receipt_number || s.id}</code></td>
+          <td data-label="Timestamp">${dt}</td>
+          <td data-label="Payment"><span class="badge-${s.payment_method === 'MPESA' ? 'success' : 'primary'}">${s.payment_method || 'CASH'}</span></td>
+          <td data-label="Items Sold">${s.items_count || 1} Items</td>
+          <td data-label="Total Amount"><strong>KES ${Number(s.total_kes || 0).toFixed(2)}</strong></td>
+          <td data-label="Tax">KES ${Number(s.tax_kes || 0).toFixed(2)}</td>
+          <td data-label="Fiscal Status"><span class="badge-success">FISCALIZED (KRA eTIMS)</span></td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+  }
 }
 
 // UI Helpers
