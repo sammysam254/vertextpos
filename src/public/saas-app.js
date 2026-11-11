@@ -84,38 +84,9 @@ window.switchAuthTab = function(mode) {
   }
 };
 
-window.checkSuperAdminBadge = function(val) {
-  const badge = document.getElementById('superAdminDetectionBadge');
-  if (val.trim().toLowerCase() === 'sammyseth260@gmail.com') {
-    badge.style.display = 'flex';
-  } else {
-    badge.style.display = 'none';
-  }
-};
-
-window.checkRegSuperAdminBadge = function(val) {
-  const badge = document.getElementById('regSuperAdminBadge');
-  const groupBiz = document.getElementById('groupRegBusiness');
-  const groupLoc = document.getElementById('groupRegLocation');
-
-  if (val.trim().toLowerCase() === 'sammyseth260@gmail.com') {
-    badge.style.display = 'flex';
-    if (groupBiz) groupBiz.style.display = 'none';
-    if (groupLoc) groupLoc.style.display = 'none';
-  } else {
-    badge.style.display = 'none';
-    if (groupBiz) groupBiz.style.display = 'block';
-    if (groupLoc) groupLoc.style.display = 'flex';
-  }
-};
-
-window.fillCredentials = function(email, password) {
-  document.getElementById('txtLoginEmail').value = email;
-  document.getElementById('txtLoginPassword').value = password;
-  window.checkSuperAdminBadge(email);
-  window.switchAuthTab('signin');
-  executeLogin(email, password);
-};
+window.checkSuperAdminBadge = function() {};
+window.checkRegSuperAdminBadge = function() {};
+window.fillCredentials = function() {};
 
 // Sign In Form Handler
 window.handleLoginFormSubmit = async function(e) {
@@ -1659,6 +1630,11 @@ window.previewReceipt = async function(saleId) {
 // 7. SUPER ADMIN DASHBOARD & PER-BUSINESS DARAJA TILL CONFIGURATION
 // =========================================================================
 window.loadSuperAdminDashboard = async function() {
+  const emailElem = document.getElementById('saasAdminEmailDisplay');
+  if (emailElem && STATE.currentUser) {
+    emailElem.textContent = STATE.currentUser.email || 'Super Admin';
+  }
+
   const res = await fetch('/api/dashboard/super_admin', {
     headers: { 'X-Tenant-Id': STATE.currentTenantId, 'Authorization': `Bearer ${STATE.token}` }
   });

@@ -85,17 +85,10 @@ Open `http://127.0.0.1:3000` to access the responsive Cashier POS, M-Pesa Daraja
 
 ---
 
-## 3. Pre-Seeded Demo Accounts
+## 3. Authentication & User Management
 
-| Role | Email / Username | Password | Default Scope |
-| :--- | :--- | :--- | :--- |
-| **SaaS Super Admin** | `admin@poscloud.ke` / `superadmin` | `Admin@2026!` | Global SaaS Console |
-| **Business Owner** | `owner@metromart.ke` / `owner_james` | `Owner@2026!` | MetroMart Supermarkets |
-| **Business Admin** | `admin@metromart.ke` / `admin_sarah` | `Admin@2026!` | MetroMart Supermarkets |
-| **Branch Manager** | `manager@metromart.ke` / `mgr_patrick` | `Manager@2026!` | Nairobi CBD MegaStore (BR-001) |
-| **Supervisor** | `supervisor@metromart.ke` / `super_alice` | `Super@2026!` | Nairobi CBD MegaStore (BR-001) |
-| **Cashier** | `cashier@metromart.ke` / `cashier_dave` | `Cashier@2026!` | Counter 1 (REG-01) |
-| **Stock Manager** | `stock@metromart.ke` / `stock_kevin` | `Stock@2026!` | Central Inventory Ledger |
-| **Procurement** | `procure@metromart.ke` / `procure_lucy` | `Procure@2026!` | Purchase Orders & Suppliers |
-| **Accountant** | `accounts@metromart.ke` / `accts_paul` | `Accounts@2026!` | Financial Statements & VAT |
-| **Auditor** | `auditor@metromart.ke` / `audit_grace` | `Auditor@2026!` | Immutable Audit Trail |
+All authentication is strictly governed by **Supabase Cloud GoTrue Auth** and Supabase Cloud PostgreSQL:
+
+- **Strict Identity Verification**: Passwords and user sessions are validated directly by Supabase Auth (`/auth/v1/token?grant_type=password`).
+- **Zero Hardcoded Passwords**: No default passwords or bypasses exist in the application. Users and passwords must be registered or managed directly through the Supabase Dashboard (`Authentication -> Users`) or through the application's self-service owner onboarding.
+- **Enterprise Hierarchy**: Roles (`super_admin`, `owner`, `admin`, `manager`, `supervisor`, `cashier`, `inventory_manager`, `procurement_officer`, `accountant`, `auditor`) are securely resolved from Supabase user metadata and isolated by Tenant UUID.

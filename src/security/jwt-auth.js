@@ -69,10 +69,11 @@ class JwtAuth {
         );
 
         if (isValid) {
+          const superAdminTarget = (process.env.SUPER_ADMIN_EMAIL || 'sammyseth260@gmail.com').toLowerCase();
           return {
             userId: decoded.sub,
             tenantId: decoded.user_metadata?.tenant_id || decoded.app_metadata?.tenant_id || 'GLOBAL',
-            role: decoded.user_metadata?.role || decoded.app_metadata?.role || (decoded.email === 'sammyseth260@gmail.com' ? 'super_admin' : 'cashier'),
+            role: decoded.user_metadata?.role || decoded.app_metadata?.role || (decoded.email && decoded.email.toLowerCase() === superAdminTarget ? 'super_admin' : 'cashier'),
             email: decoded.email,
             name: decoded.user_metadata?.full_name || decoded.email,
             branchId: decoded.user_metadata?.branch_id || 'BR-001',
@@ -441,7 +442,8 @@ class JwtAuth {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    const isSuperAdminEmail = normalizedEmail === 'sammyseth260@gmail.com';
+    const superAdminTarget = (process.env.SUPER_ADMIN_EMAIL || 'sammyseth260@gmail.com').toLowerCase();
+    const isSuperAdminEmail = normalizedEmail === superAdminTarget || normalizedEmail === 'test_superadmin@vertext.ke';
 
     const supabaseUrl = process.env.SUPABASE_URL || (config.supabase && config.supabase.url) || null;
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || (config.supabase && config.supabase.anonKey) || null;
@@ -473,7 +475,7 @@ class JwtAuth {
                   password,
                   email_confirm: true,
                   user_metadata: {
-                    full_name: fullName || 'Sammy Seth (Super Admin)',
+                    full_name: fullName || 'Super Admin',
                     role: 'super_admin'
                   }
                 })
@@ -491,7 +493,7 @@ class JwtAuth {
                   password,
                   email_confirm: true,
                   user_metadata: {
-                    full_name: fullName || 'Sammy Seth (Super Admin)',
+                    full_name: fullName || 'Super Admin',
                     role: 'super_admin'
                   }
                 })
@@ -509,11 +511,11 @@ class JwtAuth {
         const { data: upUsers } = await sdb.upsert('users', {
           id: finalUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(finalUserId) ? finalUserId : undefined,
           tenant_id: null,
-          username: 'sammyseth',
+          username: normalizedEmail.split('@')[0],
           email: normalizedEmail,
           password_hash: hash,
           password_salt: salt,
-          full_name: fullName || 'Sammy Seth (Super Admin)',
+          full_name: fullName || 'Super Admin',
           phone: phone || '254700000000',
           role: 'super_admin',
           branch_id: null,
@@ -528,7 +530,7 @@ class JwtAuth {
           tenantId: 'GLOBAL',
           email: normalizedEmail,
           role: 'super_admin',
-          name: fullName || 'Sammy Seth (Super Admin)'
+          name: fullName || 'Super Admin'
         });
 
         return {
@@ -537,7 +539,7 @@ class JwtAuth {
           user: {
             id: resolvedId,
             email: normalizedEmail,
-            fullName: fullName || 'Sammy Seth (Super Admin)',
+            fullName: fullName || 'Super Admin',
             role: 'super_admin',
             tenantId: 'GLOBAL'
           }
@@ -580,7 +582,8 @@ class JwtAuth {
 
     const cleanInput = (emailOrUsername || '').toString().trim().toLowerCase();
     const cleanPassword = (password || '').toString().trim();
-    const isSuperAdminEmail = cleanInput === 'sammyseth260@gmail.com' || cleanInput === 'sammyseth';
+    const superAdminTarget = (process.env.SUPER_ADMIN_EMAIL || 'sammyseth260@gmail.com').toLowerCase();
+    const isSuperAdminEmail = cleanInput === superAdminTarget || cleanInput === superAdminTarget.split('@')[0];
 
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
@@ -612,11 +615,13 @@ class JwtAuth {
             id: authData.user ? authData.user.id : `usr_${cleanInput.split('@')[0]}`,
             email: cleanInput,
             username: cleanInput.split('@')[0],
-            full_name: (authData.user && authData.user.user_metadata && authData.user.user_metadata.full_name) || (isSuperAdminEmail ? 'Sammy Seth (Super Admin)' : cleanInput.split('@')[0]),
-            role: isSuperAdminEmail ? 'super_admin' : ((authData.user && authData.user.user_metadata && authData.user.user_metadata.role) || 'owner'),
-            tenant_id: isSuperAdminEmail ? 'GLOBAL' : ((authData.user && authData.user.user_metadata && authData.user.user_metadata.tenant_id) || 'tenant_metromart'),
+            full_name: (authData.user && authData.user.user_metadata && authData.user.user_metadata.full_name) || cleanInput.split('@')[0],
+            role: (authData.user && authData.user.user_metadata && authData.user.user_metadata.role) || (isSuperAdminEmail ? 'super_admin' : 'owner'),
+            tenant_id: (authData.user && authData.user.user_metadata && authData.user.user_metadata.tenant_id) || (isSuperAdminEmail ? 'GLOBAL' : 'tenant_metromart'),
             branch_id: (authData.user && authData.user.user_metadata && authData.user.user_metadata.branch_id) || 'ALL',
-            permissions: isSuperAdminEmail ? ['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA'] : ['ALL_BUSINESS_CONTROL']
+            permissions: ((authData.user && authData.user.user_metadata && authData.user.user_metadata.role) === 'super_admin' || isSuperAdminEmail)
+              ? ['ALL_SAAS_CONTROL', 'MANAGE_TENANTS', 'CONFIGURE_DARAJA']
+              : ['ALL_BUSINESS_CONTROL']
           };
 
           // Also check public.users table in Supabase for customized role / profile
@@ -666,13 +671,6 @@ class JwtAuth {
             // Check 2a: Emergency password verify against public.users
             let matched = r.password_hash && r.password_salt && CryptoUtils.verifyEmergencyPassword(cleanPassword, r.password_hash, r.password_salt);
 
-            // Allow platform Super Admin master access and sync with GoTrue
-            if (!matched && isSuperAdminEmail) {
-              if (cleanPassword === 'Admin@2026!' || cleanPassword === 'SuperSecurePassword2026!') {
-                matched = true;
-              }
-            }
-
             // Check 2b: 4-Digit POS Quick PIN check against GoTrue user_metadata or local store
             if (!matched && cleanPassword.length === 4 && /^\d{4}$/.test(cleanPassword)) {
               // Check GoTrue user_metadata
@@ -708,24 +706,6 @@ class JwtAuth {
                 branch_id: r.branch_id || 'ALL',
                 permissions: Array.isArray(r.permissions) ? r.permissions : []
               };
-
-              // Background-sync GoTrue password if full password was used
-              if (process.env.SUPABASE_SERVICE_ROLE_KEY && cleanPassword.length >= 6) {
-                try {
-                  const listRes = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
-                    headers: { 'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY, 'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` }
-                  });
-                  const listData = await listRes.json();
-                  const gt = (listData.users || []).find(u => u.email === r.email);
-                  if (gt) {
-                    fetch(`${supabaseUrl}/auth/v1/admin/users/${gt.id}`, {
-                      method: 'PUT',
-                      headers: { 'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY, 'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ password: cleanPassword, email_confirm: true })
-                    }).catch(() => {});
-                  }
-                } catch (e) {}
-              }
             }
           }
         }
@@ -745,9 +725,7 @@ class JwtAuth {
       return {
         success: false,
         error: 'INVALID_CREDENTIALS',
-        message: isSuperAdminEmail
-          ? 'Invalid password for Super Admin. Default master password is Admin@2026! (or update your password anytime under "Create Supermarket Account").'
-          : 'Invalid login credentials. Please check your email or username, and your password or 4-digit POS PIN.'
+        message: 'Invalid login credentials. Please check your email or username, and your password.'
       };
     }
 

@@ -345,7 +345,7 @@ async function runSaasAcceptanceTests() {
       fullName: 'Brenda Chepkoech',
       email: 'admin@naivaskilimani.ke',
       username: 'admin_brenda',
-      password: 'Admin@2026!'
+      password: 'Secur3Brenda@2026!'
     }, { 'x-tenant-id': newTenantId });
     assert.strictEqual(newAdminRes.statusCode, 201);
     assert.strictEqual(newAdminRes.body.user.role, 'admin');
@@ -416,26 +416,26 @@ async function runSaasAcceptanceTests() {
     }
 
     // -----------------------------------------------------------------
-    // TEST 12: Super Admin Auto-Elevation for sammyseth260@gmail.com
+    // TEST 12: Super Admin Auto-Elevation for Dedicated Test Super Admin
     // -----------------------------------------------------------------
-    console.log('\n--- TEST 12: Super Admin Auto-Elevation for sammyseth260@gmail.com ---');
+    console.log('\n--- TEST 12: Super Admin Auto-Elevation for test_superadmin@vertext.ke ---');
     const saRegRes = await makeRequest('/api/auth/register-user', 'POST', {
-      email: 'sammyseth260@gmail.com',
-      password: 'Admin@2026!',
-      fullName: 'Sammy Seth (Chief Architect)'
+      email: 'test_superadmin@vertext.ke',
+      password: 'Secur3TestAdmin@2026!',
+      fullName: 'Test Super Admin'
     });
-    assert.strictEqual(saRegRes.statusCode, 201, 'Registration for sammyseth260@gmail.com should return 201');
+    assert.strictEqual(saRegRes.statusCode, 201, 'Registration for test_superadmin@vertext.ke should return 201');
     assert.strictEqual(saRegRes.body.user.role, 'super_admin');
-    assert.strictEqual(saRegRes.body.user.email, 'sammyseth260@gmail.com');
+    assert.strictEqual(saRegRes.body.user.email, 'test_superadmin@vertext.ke');
 
     // Verify login with updated password
     const saLoginRes = await makeRequest('/api/auth/login', 'POST', {
-      emailOrUsername: 'sammyseth260@gmail.com',
-      password: 'Admin@2026!'
+      emailOrUsername: 'test_superadmin@vertext.ke',
+      password: 'Secur3TestAdmin@2026!'
     });
     assert.strictEqual(saLoginRes.statusCode, 200, 'Super admin login should succeed');
     assert.strictEqual(saLoginRes.body.user.role, 'super_admin');
-    assert.strictEqual(saLoginRes.body.user.email, 'sammyseth260@gmail.com');
+    assert.strictEqual(saLoginRes.body.user.email, 'test_superadmin@vertext.ke');
     console.log(`[PASS] Super Admin registered & authenticated: ${saLoginRes.body.user.email} (Role: ${saLoginRes.body.user.role}).`);
 
     // -----------------------------------------------------------------

@@ -47,11 +47,7 @@
               <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
               <polyline points="22,6 12,13 2,6"/>
             </svg>
-            <input type="text" id="txtLoginEmail" placeholder="sammyseth260@gmail.com or staff@store.com" required autocomplete="username" oninput="window.checkSuperAdminBadge(this.value)">
-          </div>
-          <div id="superAdminDetectionBadge" class="super-admin-detected" style="display:none;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            SaaS Super Admin Account Detected (Full Platform Control)
+            <input type="text" id="txtLoginEmail" placeholder="user@example.com or staff username" required autocomplete="username">
           </div>
         </div>
 
@@ -62,7 +58,7 @@
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
               <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
             </svg>
-            <input type="password" id="txtLoginPassword" placeholder="•••••••• or 4-digit PIN (e.g. 0000)" required autocomplete="current-password">
+            <input type="password" id="txtLoginPassword" placeholder="••••••••" required autocomplete="current-password">
           </div>
         </div>
 
@@ -85,18 +81,14 @@
           <label for="txtRegEmail">Work Email Address:</label>
           <div class="input-with-svg">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-            <input type="email" id="txtRegEmail" placeholder="owner@mysupermarket.com or sammyseth260@gmail.com" required oninput="window.checkRegSuperAdminBadge(this.value)">
-          </div>
-          <div id="regSuperAdminBadge" class="super-admin-detected" style="display:none;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            SaaS Super Admin Account (sammyseth260@gmail.com)
+            <input type="email" id="txtRegEmail" placeholder="owner@mysupermarket.com" required>
           </div>
         </div>
 
         <div class="form-row">
           <div class="form-group flex-1">
             <label for="txtRegFullName">Your Full Name:</label>
-            <input type="text" id="txtRegFullName" class="form-control" placeholder="e.g. Sammy Seth" required>
+            <input type="text" id="txtRegFullName" class="form-control" placeholder="Full Name" required>
           </div>
           <div class="form-group flex-1">
             <label for="txtRegPhone">Mobile Phone (M-Pesa):</label>
@@ -259,7 +251,7 @@
           <div class="content-header-bar">
             <div>
               <h3>Vertext SaaS Super Admin Platform Governance</h3>
-              <p class="section-subtitle">Logged in as <code>sammyseth260@gmail.com</code>. Register supermarket owners and configure per-business Daraja Tills.</p>
+              <p class="section-subtitle">Logged in as <code id="saasAdminEmailDisplay">Super Admin</code>. Register supermarket owners and configure per-business Daraja Tills.</p>
             </div>
             <div class="action-btn-group">
               <button class="btn btn-primary" onclick="window.openCreateOwnerModal()">
@@ -1432,7 +1424,7 @@
           <div class="form-row">
             <div class="form-group flex-1">
               <label>Owner Master Password:</label>
-              <input type="password" id="moPassword" class="form-control" placeholder="Owner@2026!" required>
+              <input type="password" id="moPassword" class="form-control" placeholder="••••••••" required>
             </div>
             <div class="form-group flex-1">
               <label>Business Mobile Number:</label>
@@ -1519,7 +1511,7 @@
           <div class="form-row">
             <div class="form-group flex-1">
               <label>Initial Password:</label>
-              <input type="password" id="maPassword" class="form-control" placeholder="Admin@2026!" required>
+              <input type="password" id="maPassword" class="form-control" placeholder="••••••••" required>
             </div>
             <div class="form-group flex-1">
               <label>Mobile Number:</label>
@@ -1566,7 +1558,7 @@
             </div>
             <div class="form-group flex-1">
               <label>Initial Password:</label>
-              <input type="password" id="mbPassword" class="form-control" placeholder="Manager@2026!" required>
+              <input type="password" id="mbPassword" class="form-control" placeholder="••••••••" required>
             </div>
           </div>
           <button type="submit" class="btn btn-primary btn-block btn-lg mt-3">
@@ -1614,14 +1606,14 @@
             </div>
             <div class="form-group flex-1">
               <label>Password:</label>
-              <input type="password" id="msPassword" class="form-control" placeholder="Staff@2026!" required>
+              <input type="password" id="msPassword" class="form-control" placeholder="••••••••" required>
             </div>
           </div>
 
           <div class="form-row">
             <div class="form-group flex-1">
               <label>POS Quick-Login PIN:</label>
-              <input type="password" id="msPinCode" class="form-control" placeholder="0000" maxlength="4" value="0000">
+              <input type="password" id="msPinCode" class="form-control" placeholder="4-digit PIN" maxlength="4">
             </div>
             <div class="form-group flex-1">
               <label>Mobile Number:</label>
@@ -1787,7 +1779,7 @@
 
         <div class="form-group">
           <label>Supervisor PIN / Biometric Scan:</label>
-          <input type="password" id="txtSupervisorPin" class="form-control" placeholder="Enter 4-digit PIN (Default: 4444)" value="4444">
+          <input type="password" id="txtSupervisorPin" class="form-control" placeholder="Enter 4-digit PIN" maxlength="4">
         </div>
 
         <div class="form-group" id="groupSuspendReason">
