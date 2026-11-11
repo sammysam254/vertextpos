@@ -723,10 +723,11 @@ class SaasRouter {
           totalArrKes: totalMrr * 12,
           tenants: tList.map(t => ({
             ...t,
-            monthlySubscriptionKes: t.plan_id === 'enterprise' ? 15000 : 6500,
+            name: t.name || t.trade_name || t.legal_name || 'Supermarket Store',
+            monthlySubscriptionKes: Number(t.monthly_subscription_kes) || (t.plan_id === 'enterprise' ? 15000 : 6500),
             billingSchedule: '1st of every month',
             nextBillingDate: '2026-12-01',
-            status: t.status
+            status: t.status || t.subscription_status || 'ACTIVE'
           })),
           systemHealth: {
             databaseEngine: 'Supabase Cloud PostgreSQL (Strictly Online Cloud Alone)',

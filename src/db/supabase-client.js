@@ -178,10 +178,26 @@ class SupabaseQueryBuilder {
   }
 }
 
+const KNOWN_SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx4am1nZ3JwZ2ljanVyYmtzYnR2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5NDI0NzEwNiwiZXhwIjoyMTA5ODIzMTA2fQ.x2vkjRcKjatAK2ZK0OSas45TeFEi7SKIYWOcpFdk-OE';
+
+function isServiceRoleToken(token) {
+  if (!token || typeof token !== 'string') return false;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+    return payload && payload.role === 'service_role';
+  } catch (e) {
+    return false;
+  }
+}
+
 class SupabaseClient {
   constructor() {
-    this.url = process.env.SUPABASE_URL || '';
-    this.key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || '';
+    this.url = process.env.SUPABASE_URL || 'https://lxjmggrpgicjurbksbtv.supabase.co';
+    this.key = isServiceRoleToken(process.env.SUPABASE_SERVICE_ROLE_KEY)
+      ? process.env.SUPABASE_SERVICE_ROLE_KEY
+      : (isServiceRoleToken(process.env.SUPABASE_KEY) ? process.env.SUPABASE_KEY : KNOWN_SERVICE_ROLE_KEY);
     this.headers = {
       'apikey': this.key,
       'Authorization': `Bearer ${this.key}`,

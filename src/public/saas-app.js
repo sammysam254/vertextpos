@@ -1677,8 +1677,8 @@ window.loadSuperAdminDashboard = async function() {
       const tr = document.createElement('tr');
       const tillInfo = t.mpesa_shortcode ? `${t.mpesa_shortcode} (${t.mpesa_type || 'TILL'})` : 'Default (174379)';
       tr.innerHTML = `
-        <td><strong>${t.name}</strong><br><small style="color:#64748b">${t.email || ''}</small></td>
-        <td><strong>${t.kra_pin}</strong></td>
+        <td><strong>${t.name || t.trade_name || t.legal_name || 'Supermarket Store'}</strong><br><small style="color:#64748b">${t.email || t.business_email || ''}</small></td>
+        <td><strong>${t.kra_pin || 'N/A'}</strong></td>
         <td><strong style="color:#16a34a;">${tillInfo}</strong></td>
         <td><strong>KES ${(t.monthlySubscriptionKes || 6500).toLocaleString()}.00</strong></td>
         <td><span class="badge-primary">${t.billingSchedule || '1st of every month'}</span></td>
