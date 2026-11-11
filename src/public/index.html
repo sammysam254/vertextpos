@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <title>Vertext POS — SaaS Retail Enterprise Platform (KES)</title>
-  <link rel="stylesheet" href="styles.css?v=3.8">
+  <link rel="stylesheet" href="styles.css?v=4.1">
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1221,30 +1221,58 @@
         <!-- OPERATIONAL VIEW: FMCG INVENTORY CATALOG                            -->
         <!-- =================================================================== -->
         <section id="viewInventory" class="role-view-panel">
-          <div class="content-card">
+          <div class="content-card full-screen-inventory-card">
             <div class="card-head">
               <div>
                 <h4>Kenyan Supermarket Product Catalog (FMCG)</h4>
                 <p class="section-subtitle">Real EAN-13 barcodes, KES cost/selling/wholesale prices, and KRA VAT rates.</p>
               </div>
-              <button class="btn btn-primary" onclick="window.openAddProductModal()">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                + Add Product
-              </button>
+              <div style="display:flex; gap:10px; align-items:center;">
+                <span class="badge-primary" id="lblInventoryCount" style="padding:6px 14px; font-size:0.82rem; font-weight:800; background:#e0f2fe; color:#0369a1; border-color:#bae6fd;">Loading FMCG Catalog...</span>
+                <button type="button" class="btn btn-outline btn-sm" onclick="window.toggleSidebar()" title="Toggle Sidebar for Maximum Screen Width" style="font-weight:700;">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle; margin-right:4px;"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                  Full Width
+                </button>
+                <button type="button" class="btn btn-primary" onclick="window.openAddProductModal()" style="font-weight:700;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle; margin-right:4px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  + Add Product
+                </button>
+              </div>
             </div>
 
-            <div class="table-responsive">
-              <table class="saas-table">
+            <!-- Full-Width Fast Search & Category Filter Bar -->
+            <div class="inventory-toolbar">
+              <div class="inventory-search-box">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" id="txtInventoryFilter" placeholder="Search by barcode, product name, or SKU across whole supermarket catalog..." oninput="window.filterInventoryTable()" class="form-control">
+              </div>
+              <div class="inventory-category-box">
+                <select id="selInventoryCategory" class="form-control" onchange="window.filterInventoryTable()">
+                  <option value="">All FMCG Categories</option>
+                  <option value="Dairy & Eggs">Dairy &amp; Eggs</option>
+                  <option value="Grains & Flours">Grains &amp; Flours</option>
+                  <option value="Pantry & Spices">Pantry &amp; Spices</option>
+                  <option value="Beverages">Beverages</option>
+                  <option value="Household & Cleaning">Household &amp; Cleaning</option>
+                  <option value="Personal Care">Personal Care</option>
+                  <option value="Bakery & Snacks">Bakery &amp; Snacks</option>
+                  <option value="Fresh Produce">Fresh Produce</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="table-responsive inventory-table-responsive">
+              <table class="saas-table full-width-table">
                 <thead>
                   <tr>
-                    <th>Barcode</th>
-                    <th>Product SKU &amp; Name</th>
-                    <th>Category</th>
-                    <th>Cost Price (KES)</th>
-                    <th>Retail Price (KES)</th>
-                    <th>Wholesale (KES)</th>
-                    <th>VAT Rate</th>
-                    <th>Branch Stock</th>
+                    <th style="width: 14%;">Barcode</th>
+                    <th style="width: 26%;">Product SKU &amp; Name</th>
+                    <th style="width: 14%;">Category</th>
+                    <th style="width: 10%;">Cost Price (KES)</th>
+                    <th style="width: 12%;">Retail Price (KES)</th>
+                    <th style="width: 10%;">Wholesale (KES)</th>
+                    <th style="width: 7%;">VAT Rate</th>
+                    <th style="width: 7%; text-align: right;">Branch Stock</th>
                   </tr>
                 </thead>
                 <tbody id="inventoryTableBody">
@@ -2177,6 +2205,6 @@
   </div>
 
   <script src="https://unpkg.com/@zxing/library@latest/umd/index.min.js"></script>
-  <script src="saas-app.js?v=3.8"></script>
+  <script src="saas-app.js?v=4.1"></script>
 </body>
 </html>

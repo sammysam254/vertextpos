@@ -2660,6 +2660,7 @@ let deferredPwaPrompt = null;
 function initPwaInstaller() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').then((reg) => {
+      reg.update();
       console.log('[PWA] Vertext POS Service Worker active with scope:', reg.scope);
     }).catch((err) => {
       console.warn('[PWA] Service Worker registration note:', err.message);
@@ -2902,10 +2903,11 @@ window.submitCloseShift = async function() {
   }
 };
 
+let allInventoryProducts = [];
+
 async function loadInventoryTable() {
   const tbody = document.getElementById('inventoryTableBody');
   if (!tbody) return;
-  tbody.innerHTML = '';
 
   const res = await fetch('/api/products', {
     headers: { 'X-Tenant-Id': STATE.currentTenantId, 'Authorization': `Bearer ${STATE.token}` }
@@ -2913,42 +2915,78 @@ async function loadInventoryTable() {
   const data = await res.json();
   const prods = data.products || [];
 
+  // Deduplicate products
+  const seen = new Set();
+  allInventoryProducts = [];
+  for (const p of prods) {
+    const key = (p.barcode || p.name || p.id).toString().trim().toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      allInventoryProducts.push(p);
+    }
+  }
+
+  renderInventoryRows(allInventoryProducts);
+}
+
+function renderInventoryRows(prods) {
+  const tbody = document.getElementById('inventoryTableBody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  const countBadge = document.getElementById('lblInventoryCount');
+  if (countBadge) countBadge.innerText = `${prods.length} FMCG SKUs`;
+
   if (prods.length === 0) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="8" class="text-center" style="padding:24px; color:#64748b;">
-          No products in catalog yet. Tap "+ Add Product" to add your first supermarket item.
+        <td colspan="8" class="text-center" style="padding:40px; color:#64748b; font-size:0.95rem;">
+          No matching products found. Tap "+ Add Product" to add a new FMCG item.
         </td>
       </tr>
     `;
     return;
   }
 
-  const seen = new Set();
   prods.forEach(p => {
-    const key = (p.barcode || p.name || p.id).toString().trim().toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td data-label="Barcode"><code>${p.barcode}</code></td>
-      <td data-label="Product"><strong>${p.name}</strong><br><small style="color:#64748b;">SKU: ${p.sku || p.barcode}</small></td>
-      <td data-label="Category">${p.category}</td>
+      <td data-label="Barcode"><code style="font-size:0.88rem; font-weight:700; color:#1e293b;">${p.barcode}</code></td>
+      <td data-label="Product">
+        <strong style="font-size:0.92rem; color:#0f172a;">${p.name}</strong><br>
+        <small style="color:#64748b; font-size:0.75rem;">SKU: ${p.sku || p.barcode}</small>
+      </td>
+      <td data-label="Category"><span class="badge-primary" style="background:#f1f5f9; color:#334155; border:1px solid #cbd5e1; font-weight:600;">${p.category || 'FMCG & Groceries'}</span></td>
       <td data-label="Cost Price">KES ${Number(p.cost_price_kes || 0).toFixed(2)}</td>
-      <td data-label="Retail Price"><strong style="color:#16a34a; font-size:1.05rem;">KES ${Number(p.selling_price_kes || 0).toFixed(2)}</strong></td>
+      <td data-label="Retail Price"><strong style="color:#16a34a; font-size:1.1rem; font-weight:800;">KES ${Number(p.selling_price_kes || 0).toFixed(2)}</strong></td>
       <td data-label="Wholesale">KES ${Number(p.wholesale_price_kes || p.selling_price_kes).toFixed(2)}</td>
       <td data-label="VAT Rate"><span class="badge-primary">${p.vat_rate === 0.0 ? '0% Zero-Rated' : '16% Standard'}</span></td>
-      <td data-label="Branch Stock">
+      <td data-label="Branch Stock" style="text-align:right;">
         <div style="display:flex; align-items:center; justify-content:flex-end; gap:8px;">
-          <span>100 ${p.unit || 'PCS'}</span>
-          <button type="button" class="btn btn-sm btn-primary" style="padding:3px 8px; font-size:0.75rem; white-space:nowrap;" onclick="window.dispatchUniversalScan('${p.barcode}')">+ Sell</button>
+          <span style="font-weight:700; color:#334155;">100 ${p.unit || 'PCS'}</span>
+          <button type="button" class="btn btn-sm btn-primary" style="padding:4px 10px; font-size:0.75rem; font-weight:700; white-space:nowrap;" onclick="window.dispatchUniversalScan('${p.barcode}')">+ Sell</button>
         </div>
       </td>
     `;
     tbody.appendChild(tr);
   });
 }
+
+window.filterInventoryTable = function() {
+  const q = (document.getElementById('txtInventoryFilter')?.value || '').toLowerCase().trim();
+  const cat = document.getElementById('selInventoryCategory')?.value || '';
+
+  const filtered = allInventoryProducts.filter(p => {
+    const matchesQ = !q ||
+      (p.barcode && p.barcode.toLowerCase().includes(q)) ||
+      (p.name && p.name.toLowerCase().includes(q)) ||
+      (p.sku && p.sku.toLowerCase().includes(q));
+    const matchesCat = !cat || p.category === cat;
+    return matchesQ && matchesCat;
+  });
+
+  renderInventoryRows(filtered);
+};
 
 window.openAddProductModal = function() {
   const modal = document.getElementById('addProductModal');

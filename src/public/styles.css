@@ -2413,6 +2413,129 @@ body {
   .saas-table td::before {
     display: none !important;
   }
+
+  /* Full-Screen Enterprise Inventory Catalog on Desktop */
+  #viewInventory.active {
+    width: 100% !important;
+    height: 100% !important;
+    min-height: calc(100vh - 80px) !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  #viewInventory:not(.active) {
+    display: none !important;
+  }
+
+  .full-screen-inventory-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: calc(100vh - 90px) !important;
+    min-height: calc(100vh - 90px) !important;
+    flex: 1 1 0% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    padding: 18px 24px !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+  }
+
+  .inventory-toolbar {
+    display: flex !important;
+    gap: 12px !important;
+    align-items: center !important;
+    margin-bottom: 14px !important;
+    width: 100% !important;
+    flex-shrink: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  .inventory-search-box {
+    flex: 1 !important;
+    position: relative !important;
+    display: flex !important;
+    align-items: center !important;
+  }
+
+  .inventory-search-box svg {
+    position: absolute !important;
+    left: 12px !important;
+    color: #94a3b8 !important;
+    pointer-events: none !important;
+  }
+
+  .inventory-search-box input {
+    padding-left: 38px !important;
+    width: 100% !important;
+    height: 42px !important;
+    font-size: 0.92rem !important;
+    background: #f8fafc !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: var(--radius) !important;
+    box-sizing: border-box !important;
+  }
+
+  .inventory-category-box {
+    width: 240px !important;
+    flex-shrink: 0 !important;
+  }
+
+  .inventory-category-box select {
+    height: 42px !important;
+    background: #f8fafc !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: var(--radius) !important;
+    font-size: 0.88rem !important;
+    box-sizing: border-box !important;
+  }
+
+  .inventory-table-responsive {
+    width: 100% !important;
+    flex: 1 1 0% !important;
+    overflow-y: auto !important;
+    overflow-x: auto !important;
+    min-height: 0 !important;
+    border: 1px solid var(--border-light) !important;
+    border-radius: var(--radius) !important;
+    background: #ffffff !important;
+  }
+
+  .full-width-table {
+    width: 100% !important;
+    min-width: 100% !important;
+    table-layout: fixed !important;
+    border-collapse: collapse !important;
+  }
+
+  .full-width-table thead th {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 10 !important;
+    background: #f1f5f9 !important;
+    color: #475569 !important;
+    padding: 14px 16px !important;
+    font-weight: 800 !important;
+    font-size: 0.76rem !important;
+    letter-spacing: 0.5px !important;
+    border-bottom: 2px solid #cbd5e1 !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .full-width-table tbody td {
+    padding: 12px 16px !important;
+    vertical-align: middle !important;
+    border-bottom: 1px solid #f1f5f9 !important;
+    font-size: 0.88rem !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .full-width-table tbody tr:hover td {
+    background: #f8fafc !important;
+  }
 }
 
 @media (max-width: 768px) {
@@ -2578,6 +2701,21 @@ body {
   .card-head .btn {
     width: 100% !important;
     justify-content: center !important;
+  }
+
+  .inventory-toolbar {
+    flex-direction: column !important;
+    gap: 8px !important;
+    width: 100% !important;
+    margin-bottom: 12px !important;
+  }
+
+  .inventory-search-box {
+    width: 100% !important;
+  }
+
+  .inventory-category-box {
+    width: 100% !important;
   }
 
   .table-responsive {

@@ -4,7 +4,7 @@
  * Uses Network-First strategy to ensure mobile users always get fresh responsive layouts.
  */
 
-const CACHE_NAME = 'vertext-pos-v3.8';
+const CACHE_NAME = 'vertext-pos-v4.1';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
