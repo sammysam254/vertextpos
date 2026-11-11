@@ -80,10 +80,18 @@ class SaasRouter {
         const filters = { is_active: true };
         if (tenantUuid) filters.tenant_id = tenantUuid;
 
-        const { data: products } = await sdb.query('products', filters, {
+        let { data: products } = await sdb.query('products', filters, {
           orFilters: `barcode.ilike.*${encodeURIComponent(q)}*,sku.ilike.*${encodeURIComponent(q)}*,name.ilike.*${encodeURIComponent(q)}*`,
-          limit: 12
+          limit: 15
         });
+
+        if ((!products || products.length === 0) && tenantUuid) {
+          const { data: fallbackProds } = await sdb.query('products', { is_active: true }, {
+            orFilters: `barcode.ilike.*${encodeURIComponent(q)}*,sku.ilike.*${encodeURIComponent(q)}*,name.ilike.*${encodeURIComponent(q)}*`,
+            limit: 15
+          });
+          if (fallbackProds && fallbackProds.length > 0) products = fallbackProds;
+        }
 
         return this.sendJson(res, 200, { products: products || [] });
       }
@@ -130,13 +138,13 @@ class SaasRouter {
 
       // 4. Products Catalog
       if (pathname === '/api/products' && req.method === 'GET') {
-        const tenantUuid = await sdb.resolveTenantUuid(tenantId);
+        let tenantUuid = await sdb.resolveTenantUuid(tenantId);
         const filters = { is_active: true };
         if (tenantUuid) filters.tenant_id = tenantUuid;
 
         let { data: products } = await sdb.query('products', filters, { order: 'name.asc' });
-        if ((!products || products.length === 0) && (!tenantUuid || tenantId === 'tenant_metromart')) {
-          const { data: allProds } = await sdb.query('products', { is_active: true }, { limit: 20 });
+        if ((!products || products.length === 0)) {
+          const { data: allProds } = await sdb.query('products', { is_active: true }, { limit: 50 });
           products = allProds;
         }
 
@@ -145,8 +153,26 @@ class SaasRouter {
 
       if (pathname === '/api/products' && req.method === 'POST') {
         const { name, barcode, sku, category, unit, costPriceKes, sellingPriceKes, wholesalePriceKes, vatRate, initialStock } = body;
-        const tenantUuid = await sdb.resolveTenantUuid(tenantId);
-        const branchUuid = await sdb.resolveBranchUuid(tenantUuid, ctx.branchId || 'BR-001');
+        let tenantUuid = await sdb.resolveTenantUuid(tenantId);
+
+        // If Super Admin with GLOBAL scope or no tenant specified, associate with active tenant
+        if (!tenantUuid) {
+          const { data: allTenants } = await sdb.query('tenants', {}, { limit: 1 });
+          if (allTenants && allTenants.length > 0) {
+            tenantUuid = allTenants[0].id;
+          }
+        }
+
+        // Resolve or create assigned supermarket branch
+        let branchUuid = await sdb.resolveBranchUuid(tenantUuid, (ctx.branchId && ctx.branchId !== 'ALL') ? ctx.branchId : 'BR-001');
+        if (!branchUuid && tenantUuid) {
+          const { data: bList } = await sdb.query('branches', { tenant_id: tenantUuid });
+          if (bList && bList.length > 0) {
+            branchUuid = bList[0].id;
+          } else {
+            branchUuid = await sdb.resolveBranchUuid(tenantUuid, 'MAIN');
+          }
+        }
 
         const { data: pData, error: pErr } = await sdb.insert('products', {
           tenant_id: tenantUuid,
@@ -167,7 +193,7 @@ class SaasRouter {
         }
 
         const createdProd = pData[0];
-        if (branchUuid) {
+        if (branchUuid && tenantUuid) {
           await sdb.insert('inventory', {
             tenant_id: tenantUuid,
             branch_id: branchUuid,
@@ -180,7 +206,7 @@ class SaasRouter {
         return this.sendJson(res, 201, {
           success: true,
           productId: createdProd.id,
-          message: `Product "${name}" created successfully in Supabase.`
+          message: `Product "${name}" created successfully and added to supermarket stock.`
         });
       }
 

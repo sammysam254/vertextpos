@@ -2204,6 +2204,15 @@ body {
   opacity: 1;
 }
 
+/* ========================================================================= */
+/* UNIVERSAL COMPONENT DEFAULTS (DESKTOP FIRST)                              */
+/* ========================================================================= */
+
+/* Mobile Bottom Navigation Bar is strictly hidden by default on all computers */
+.mobile-bottom-nav {
+  display: none !important;
+}
+
 /* Table Responsive Mobile Wrapper */
 .table-responsive {
   width: 100%;
@@ -2211,44 +2220,180 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
-@media (max-width: 992px) {
+/* ========================================================================= */
+/* DESKTOP COMPUTERS & LAPTOPS (WIDTH >= 769px)                              */
+/* Ensures full-screen width & height, zero cut off, beautiful & fast         */
+/* ========================================================================= */
+@media (min-width: 769px) {
+  html, body {
+    height: 100vh !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    overflow: hidden !important;
+    font-size: 14px !important;
+  }
+
+  .app-layout {
+    display: flex !important;
+    height: 100vh !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    overflow: hidden !important;
+    padding-bottom: 0 !important;
+  }
+
+  .app-sidebar {
+    position: relative !important;
+    top: auto !important;
+    bottom: auto !important;
+    left: 0 !important;
+    width: 260px !important;
+    max-width: none !important;
+    display: flex !important;
+    flex-direction: column !important;
+    flex-shrink: 0 !important;
+    box-shadow: none !important;
+    border-right: 1px solid #0f172a !important;
+    z-index: 100 !important;
+  }
+
+  .app-sidebar.collapsed {
+    width: 68px !important;
+  }
+
+  .app-main-stage {
+    flex: 1 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100vh !important;
+    width: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    background-color: #f1f5f9 !important;
+  }
+
+  .stage-topbar {
+    height: 60px !important;
+    min-height: 60px !important;
+    padding: 0 24px !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+  }
+
+  .topbar-breadcrumbs {
+    display: block !important;
+  }
+
+  .stage-content {
+    flex: 1 !important;
+    overflow-y: auto !important;
+    padding: 24px !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+  }
+
   .pos-grid {
-    grid-template-columns: 1fr;
-    height: auto;
-    overflow-y: visible;
+    display: grid !important;
+    grid-template-columns: 1fr 440px !important;
+    gap: 20px !important;
+    height: calc(100vh - 108px) !important;
+    width: 100% !important;
+    overflow: hidden !important;
   }
+
   .pos-catalog-card {
-    height: auto;
-    overflow: visible;
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    overflow: hidden !important;
   }
+
   .pos-cart-card {
-    height: auto;
-    min-height: 480px;
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    overflow: hidden !important;
   }
+
+  .cart-table-wrapper {
+    flex: 1 !important;
+    overflow-y: auto !important;
+    max-height: none !important;
+  }
+
   .kpi-grid {
-    grid-template-columns: repeat(2, 1fr);
+    display: grid !important;
+    grid-template-columns: repeat(4, 1fr) !important;
+    gap: 16px !important;
+  }
+
+  .mobile-bottom-nav {
+    display: none !important;
+  }
+
+  /* Desktop Traditional Tables */
+  .saas-table {
+    display: table !important;
+    width: 100% !important;
+  }
+  .saas-table thead {
+    display: table-header-group !important;
+  }
+  .saas-table tbody {
+    display: table-row-group !important;
+  }
+  .saas-table tr {
+    display: table-row !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    margin-bottom: 0 !important;
+    padding: 0 !important;
+  }
+  .saas-table th {
+    display: table-cell !important;
+  }
+  .saas-table td {
+    display: table-cell !important;
+    text-align: left !important;
+    border-bottom: 1px solid var(--border-subtle) !important;
+    padding: 12px 14px !important;
+  }
+  .saas-table td::before {
+    display: none !important;
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 768px) {
   html, body {
-    width: 100vw !important;
-    max-width: 100vw !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: 100% !important;
     overflow-x: hidden !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-y !important;
     font-size: 13.5px !important;
   }
 
   .app-layout {
     display: block !important;
-    width: 100vw !important;
-    max-width: 100vw !important;
+    width: 100% !important;
+    max-width: 100% !important;
     height: auto !important;
     min-height: 100vh !important;
     overflow-x: hidden !important;
-    padding-bottom: 74px !important; /* Reserve clearance for mobile bottom nav */
+    overflow-y: visible !important;
+    padding-bottom: 74px !important; /* Clearance for mobile bottom nav */
+    touch-action: pan-y !important;
   }
 
-  /* Completely remove sidebar from flex layout on mobile screens */
+  /* Completely remove sidebar from desktop layout on mobile screens */
   .app-sidebar,
   .app-sidebar.collapsed {
     position: fixed !important;
@@ -2275,13 +2420,16 @@ body {
   }
 
   .app-main-stage {
-    width: 100vw !important;
-    max-width: 100vw !important;
+    width: 100% !important;
+    max-width: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
+    height: auto !important;
     min-height: 100vh !important;
     overflow-x: hidden !important;
+    overflow-y: visible !important;
     display: block !important;
+    touch-action: pan-y !important;
   }
 
   .stage-content {
@@ -2291,6 +2439,8 @@ body {
     margin: 0 !important;
     box-sizing: border-box !important;
     overflow-x: hidden !important;
+    overflow-y: visible !important;
+    touch-action: pan-y !important;
   }
 
   .stage-topbar {
@@ -2459,8 +2609,8 @@ body {
   }
 
   .scan-station-hero {
-    padding: 10px !important;
-    gap: 8px !important;
+    padding: 12px 10px !important;
+    gap: 10px !important;
   }
 
   .scan-station-header {
@@ -2525,14 +2675,30 @@ body {
     font-size: 0.95rem !important;
   }
 
-  /* Modals on Mobile */
+  /* Modals on Mobile: Natural vertical swipe/scroll so virtual keyboards never clip buttons */
+  .modal-backdrop {
+    display: flex !important;
+    align-items: flex-start !important;
+    justify-content: center !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    padding: 10px 8px 74px 8px !important;
+    touch-action: pan-y !important;
+  }
+
   .modal-dialog {
     width: 96vw !important;
     max-width: 96vw !important;
     margin: 8px auto !important;
     padding: 14px !important;
-    max-height: 94vh !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
     box-sizing: border-box !important;
+  }
+
+  .modal-body {
+    overflow: visible !important;
   }
 
   .form-row {
@@ -2554,8 +2720,12 @@ body {
     margin: 0 auto 16px auto !important;
   }
 
-  /* Mobile Bottom Navigation Bar */
+  /* Mobile Bottom Navigation Bar: strictly hidden unless authenticated! */
   .mobile-bottom-nav {
+    display: none !important;
+  }
+
+  body.authenticated .mobile-bottom-nav {
     display: flex !important;
     position: fixed !important;
     bottom: 0 !important;
@@ -2569,6 +2739,13 @@ body {
     justify-content: space-around !important;
     padding: 0 4px !important;
     box-shadow: 0 -4px 15px rgba(0, 0, 0, 0.35) !important;
+  }
+
+  /* Zero scanner or POS nav on login screen */
+  body:not(.authenticated) .mobile-bottom-nav,
+  #loginOverlay:not([style*="display: none"]) ~ * .mobile-bottom-nav,
+  .login-overlay .mobile-bottom-nav {
+    display: none !important;
   }
 
   .mobile-nav-btn {

@@ -54,13 +54,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function showLoginScreen() {
-  document.getElementById('loginOverlay').style.display = 'flex';
-  document.getElementById('appContainer').style.display = 'none';
+  document.body.classList.remove('authenticated');
+  const overlay = document.getElementById('loginOverlay');
+  if (overlay) overlay.style.display = 'flex';
+  const appCont = document.getElementById('appContainer');
+  if (appCont) appCont.style.display = 'none';
+  const mobNav = document.getElementById('mobileBottomNav');
+  if (mobNav) mobNav.style.display = 'none';
 }
 
 function hideLoginScreen() {
-  document.getElementById('loginOverlay').style.display = 'none';
-  document.getElementById('appContainer').style.display = 'flex';
+  document.body.classList.add('authenticated');
+  const overlay = document.getElementById('loginOverlay');
+  if (overlay) overlay.style.display = 'none';
+  const appCont = document.getElementById('appContainer');
+  if (appCont) {
+    appCont.style.display = window.innerWidth <= 768 ? 'block' : 'flex';
+  }
+  const mobNav = document.getElementById('mobileBottomNav');
+  if (mobNav) {
+    mobNav.style.display = window.innerWidth <= 768 ? 'flex' : 'none';
+  }
 }
 
 // Switch between Sign In and Sign Up tabs
@@ -367,7 +381,7 @@ window.setActiveMobileTab = function(btnId) {
 window.switchTab = function(tabName) {
   STATE.activeTab = tabName;
 
-  if (window.innerWidth <= 900) {
+  if (window.innerWidth <= 768) {
     window.toggleSidebar(false);
   }
 
@@ -742,6 +756,11 @@ let lastKeyTimestamp = 0;
 let scannerFastStreak = 0;
 
 window.dispatchUniversalScan = async function(barcode) {
+  // Scanner actions are strictly permitted for authenticated supermarket workers only
+  if (!STATE.currentUser || !STATE.token) return;
+  const loginOverlay = document.getElementById('loginOverlay');
+  if (loginOverlay && loginOverlay.style.display !== 'none') return;
+
   if (!barcode) return;
   const cleanCode = barcode.toString().trim().replace(/[\r\n\t]/g, '');
   if (cleanCode.length < 3) return;
@@ -792,6 +811,11 @@ function initBarcodeScannerHardware() {
   // A. Global Keydown Wedge Interceptor
   window.addEventListener('keydown', (e) => {
     if (!e || !e.key) return;
+    // Strictly isolate scanner from login screen
+    if (!STATE.currentUser || !STATE.token) return;
+    const loginOverlay = document.getElementById('loginOverlay');
+    if (loginOverlay && loginOverlay.style.display !== 'none') return;
+
     const now = Date.now();
     const interval = now - lastKeyTimestamp;
     lastKeyTimestamp = now;
@@ -838,6 +862,10 @@ function initBarcodeScannerHardware() {
 
   // B. Global Paste Interceptor (phone-to-PC clipboard sync apps)
   window.addEventListener('paste', (e) => {
+    if (!STATE.currentUser || !STATE.token) return;
+    const loginOverlay = document.getElementById('loginOverlay');
+    if (loginOverlay && loginOverlay.style.display !== 'none') return;
+
     const text = (e.clipboardData || window.clipboardData)?.getData('text')?.trim();
     if (text && /^[A-Za-z0-9\-_]{3,32}$/.test(text)) {
       const activeEl = document.activeElement;
@@ -894,6 +922,10 @@ window.scanBarcodeForNewProduct = function() {
 };
 
 window.openCameraScanner = async function(mode = 'cart') {
+  if (!STATE.currentUser || !STATE.token) {
+    showToast('Please sign in first.', 'warning');
+    return;
+  }
   scannerMode = mode;
   const modal = document.getElementById('cameraScannerModal');
   const badge = document.getElementById('cameraScannerModeBadge');
@@ -2880,6 +2912,17 @@ async function loadInventoryTable() {
   const data = await res.json();
   const prods = data.products || [];
 
+  if (prods.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="8" class="text-center" style="padding:24px; color:#64748b;">
+          No products in catalog yet. Tap "+ Add Product" to add your first supermarket item.
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
   prods.forEach(p => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -2890,50 +2933,56 @@ async function loadInventoryTable() {
       <td data-label="Retail Price"><strong style="color:#16a34a; font-size:1.05rem;">KES ${Number(p.selling_price_kes || 0).toFixed(2)}</strong></td>
       <td data-label="Wholesale">KES ${Number(p.wholesale_price_kes || p.selling_price_kes).toFixed(2)}</td>
       <td data-label="VAT Rate"><span class="badge-primary">${p.vat_rate === 0.0 ? '0% Zero-Rated' : '16% Standard'}</span></td>
-      <td data-label="Branch Stock">100 ${p.unit || 'PCS'}</td>
+      <td data-label="Branch Stock">
+        <div style="display:flex; align-items:center; justify-content:flex-end; gap:8px;">
+          <span>100 ${p.unit || 'PCS'}</span>
+          <button type="button" class="btn btn-sm btn-primary" style="padding:3px 8px; font-size:0.75rem; white-space:nowrap;" onclick="window.dispatchUniversalScan('${p.barcode}')">+ Sell</button>
+        </div>
+      </td>
     `;
     tbody.appendChild(tr);
   });
 }
 
 window.openAddProductModal = function() {
-  document.getElementById('addProductModal').style.display = 'flex';
+  const modal = document.getElementById('addProductModal');
+  if (modal) modal.style.display = 'flex';
 };
 
 window.closeAddProductModal = function() {
-  document.getElementById('addProductModal').style.display = 'none';
+  const modal = document.getElementById('addProductModal');
+  if (modal) modal.style.display = 'none';
 };
 
 window.handleCreateProductSubmit = async function(e) {
   if (e && e.preventDefault) e.preventDefault();
 
+  const nameInput = document.getElementById('npName');
+  const barcodeInput = document.getElementById('npBarcode');
+  const skuInput = document.getElementById('npSku');
+  const catElem = document.getElementById('npCategory');
+  const stockInput = document.getElementById('npInitialStock');
+  const costInput = document.getElementById('npCostPrice');
+  const sellInput = document.getElementById('npSellingPrice');
+  const wholeInput = document.getElementById('npWholesalePrice');
+  const vatElem = document.getElementById('npVatRate');
+
+  const name = nameInput ? nameInput.value.trim() : '';
+  const barcode = barcodeInput ? barcodeInput.value.trim() : '';
+
+  if (!name || !barcode) {
+    showToast('Product name and barcode are required.', 'warning');
+    return;
+  }
+
+  const retailPrice = parseFloat(sellInput?.value) || 0;
+  if (retailPrice <= 0) {
+    showToast('Retail Selling Price (KES) is required and must be greater than 0.', 'warning');
+    return;
+  }
+
   try {
-    showLoading('Saving product SKU to supermarket catalog...');
-
-    const nameInput = document.getElementById('npName');
-    const barcodeInput = document.getElementById('npBarcode');
-    const skuInput = document.getElementById('npSku');
-    const catElem = document.getElementById('npCategory');
-    const stockInput = document.getElementById('npInitialStock');
-    const costInput = document.getElementById('npCostPrice');
-    const sellInput = document.getElementById('npSellingPrice');
-    const wholeInput = document.getElementById('npWholesalePrice');
-    const vatElem = document.getElementById('npVatRate');
-
-    const name = nameInput ? nameInput.value.trim() : '';
-    const barcode = barcodeInput ? barcodeInput.value.trim() : '';
-
-    if (!name || !barcode) {
-      showToast('Product name and barcode are required.', 'warning');
-      return;
-    }
-
-    const retailPrice = parseFloat(sellInput?.value) || 0;
-    if (retailPrice <= 0) {
-      hideLoading();
-      showToast('Retail Selling Price (KES) is required and must be greater than 0.', 'warning');
-      return;
-    }
+    showLoading('Saving product SKU to supermarket stock...');
 
     const payload = {
       name,
@@ -2961,7 +3010,15 @@ window.handleCreateProductSubmit = async function(e) {
 
     if (data.success) {
       window.closeAddProductModal();
-      showToast(`Product "${payload.name}" saved successfully!`, 'success');
+      // Clear form inputs
+      if (nameInput) nameInput.value = '';
+      if (barcodeInput) barcodeInput.value = '';
+      if (skuInput) skuInput.value = '';
+      if (sellInput) sellInput.value = '';
+      if (costInput) costInput.value = '';
+      if (wholeInput) wholeInput.value = '';
+
+      showToast(`Product "${payload.name}" saved to supermarket stock!`, 'success');
       try { await loadProducts(); } catch (e) {}
       try {
         if (document.getElementById('inventoryTableBody')) {
@@ -2974,6 +3031,9 @@ window.handleCreateProductSubmit = async function(e) {
       const isPos = activeTab && activeTab.dataset.tab === 'pos';
       if (isPos && payload.barcode) {
         await addItemByBarcode(payload.barcode);
+      } else {
+        // Show in catalog
+        window.switchTab('inventory');
       }
     } else {
       showToast(`Error: ${data.message || 'Failed to save product.'}`, 'error');
