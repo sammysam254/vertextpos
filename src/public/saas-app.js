@@ -357,13 +357,23 @@ function getSvgIcon(name) {
 
 // =========================================================================
 // 3. TAB NAVIGATION & VIEW SWITCHING
+window.setActiveMobileTab = function(btnId) {
+  document.querySelectorAll('.mobile-nav-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById(btnId);
+  if (btn) btn.classList.add('active');
+};
+
 // =========================================================================
 window.switchTab = function(tabName) {
   STATE.activeTab = tabName;
 
-  if (window.innerWidth <= 768) {
+  if (window.innerWidth <= 900) {
     window.toggleSidebar(false);
   }
+
+  if (tabName === 'pos') window.setActiveMobileTab('mobNavPos');
+  else if (tabName === 'inventory') window.setActiveMobileTab('mobNavInventory');
+  else window.setActiveMobileTab('mobNavDashboard');
 
   document.querySelectorAll('.nav-link').forEach(btn => btn.classList.remove('active'));
   document.querySelectorAll('.role-view-panel').forEach(p => p.classList.remove('active'));
@@ -2873,14 +2883,14 @@ async function loadInventoryTable() {
   prods.forEach(p => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><code>${p.barcode}</code></td>
-      <td><strong>${p.name}</strong><br><small style="color:#64748b;">SKU: ${p.sku || p.barcode}</small></td>
-      <td>${p.category}</td>
-      <td>KES ${Number(p.cost_price_kes || 0).toFixed(2)}</td>
-      <td><strong>KES ${Number(p.selling_price_kes || 0).toFixed(2)}</strong></td>
-      <td>KES ${Number(p.wholesale_price_kes || p.selling_price_kes).toFixed(2)}</td>
-      <td><span class="badge-primary">${p.vat_rate === 0.0 ? '0% Zero-Rated' : '16% Standard'}</span></td>
-      <td>100 ${p.unit || 'PCS'}</td>
+      <td data-label="Barcode"><code>${p.barcode}</code></td>
+      <td data-label="Product"><strong>${p.name}</strong><br><small style="color:#64748b;">SKU: ${p.sku || p.barcode}</small></td>
+      <td data-label="Category">${p.category}</td>
+      <td data-label="Cost Price">KES ${Number(p.cost_price_kes || 0).toFixed(2)}</td>
+      <td data-label="Retail Price"><strong style="color:#16a34a; font-size:1.05rem;">KES ${Number(p.selling_price_kes || 0).toFixed(2)}</strong></td>
+      <td data-label="Wholesale">KES ${Number(p.wholesale_price_kes || p.selling_price_kes).toFixed(2)}</td>
+      <td data-label="VAT Rate"><span class="badge-primary">${p.vat_rate === 0.0 ? '0% Zero-Rated' : '16% Standard'}</span></td>
+      <td data-label="Branch Stock">100 ${p.unit || 'PCS'}</td>
     `;
     tbody.appendChild(tr);
   });

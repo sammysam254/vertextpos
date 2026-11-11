@@ -1,9 +1,10 @@
 /**
  * Vertext POS Service Worker
- * Enables PWA desktop/mobile installation and offline asset caching
+ * Enables PWA desktop/mobile installation and resilient offline asset caching
+ * Uses Network-First strategy to ensure mobile users always get fresh responsive layouts.
  */
 
-const CACHE_NAME = 'vertext-pos-v2.9';
+const CACHE_NAME = 'vertext-pos-v3.5';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -14,10 +15,11 @@ const ASSETS_TO_CACHE = [
 ];
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(ASSETS_TO_CACHE);
-    }).then(() => self.skipWaiting())
+    })
   );
 });
 
@@ -25,7 +27,12 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+        keys.map((key) => {
+          if (key !== CACHE_NAME) {
+            console.log('[SW] Purging stale service worker cache:', key);
+            return caches.delete(key);
+          }
+        })
       );
     }).then(() => self.clients.claim())
   );
@@ -34,11 +41,11 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const requestUrl = new URL(event.request.url);
 
-  // Network-first for dynamic APIs and SSE events
+  // APIs and SSE events: Network-First with offline JSON fallback
   if (requestUrl.pathname.startsWith('/api/') || requestUrl.pathname.startsWith('/receipt/')) {
     event.respondWith(
       fetch(event.request).catch(() => {
-        return new Response(JSON.stringify({ error: 'OFFLINE', message: 'You are currently offline. Please check your internet connection to reach Supabase Cloud.' }), {
+        return new Response(JSON.stringify({ error: 'OFFLINE', message: 'You are currently offline. Operations are queued locally.' }), {
           headers: { 'Content-Type': 'application/json' }
         });
       })
@@ -46,22 +53,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for static assets
+  // Static Assets (HTML, CSS, JS): Network-First with Cache Fallback
+  // Always fetches fresh CSS and JS from network when connected
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-      return fetch(event.request).then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
           const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(event.request, responseToCache);
           });
         }
         return networkResponse;
-      });
-    })
+      })
+      .catch(() => {
+        return caches.match(event.request);
+      })
   );
 });
 
