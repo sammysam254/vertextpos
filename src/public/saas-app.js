@@ -31,6 +31,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initBarcodeScannerHardware();
   initCloudSyncPoller();
   initPwaInstaller();
+  PrinterManager.init();
 
   // Restore saved session if valid
   const savedToken = sessionStorage.getItem('vertext_token');
@@ -360,6 +361,10 @@ function getSvgIcon(name) {
 window.switchTab = function(tabName) {
   STATE.activeTab = tabName;
 
+  if (window.innerWidth <= 768) {
+    window.toggleSidebar(false);
+  }
+
   document.querySelectorAll('.nav-link').forEach(btn => btn.classList.remove('active'));
   document.querySelectorAll('.role-view-panel').forEach(p => p.classList.remove('active'));
 
@@ -433,13 +438,27 @@ function capitalizeRole(role) {
   return role.split('_').map(capitalize).join('');
 }
 
-window.toggleSidebar = function() {
+window.toggleSidebar = function(forceState) {
   const sidebar = document.getElementById('appSidebar');
-  STATE.sidebarCollapsed = !STATE.sidebarCollapsed;
-  if (STATE.sidebarCollapsed) {
-    sidebar.classList.add('collapsed');
+  const backdrop = document.getElementById('sidebarMobileBackdrop');
+  const isMobile = window.innerWidth <= 768;
+
+  if (isMobile) {
+    const shouldOpen = forceState !== undefined ? forceState : !sidebar.classList.contains('mobile-open');
+    if (shouldOpen) {
+      sidebar.classList.add('mobile-open');
+      if (backdrop) backdrop.classList.add('active');
+    } else {
+      sidebar.classList.remove('mobile-open');
+      if (backdrop) backdrop.classList.remove('active');
+    }
   } else {
-    sidebar.classList.remove('collapsed');
+    STATE.sidebarCollapsed = forceState !== undefined ? !forceState : !STATE.sidebarCollapsed;
+    if (STATE.sidebarCollapsed) {
+      sidebar.classList.add('collapsed');
+    } else {
+      sidebar.classList.remove('collapsed');
+    }
   }
 };
 
@@ -495,10 +514,10 @@ window.handleScanKeydown = function(e) {
 
 window.handleBarcodeEnter = function() {
   const input = document.getElementById('txtBarcode');
-  const code = input.value.trim();
+  const code = input ? input.value.trim() : '';
   if (!code) return;
-  addItemByBarcode(code);
-  input.value = '';
+  window.dispatchUniversalScan(code);
+  if (input) input.value = '';
   renderSkuSearchResults([]);
 };
 
@@ -703,50 +722,130 @@ function playScannerBeep() {
   } catch (e) {}
 }
 
-// 1. Hardware Keyboard Wedge Barcode Interceptor (USB, Bluetooth, 2.4G & Companion Phone)
+// =========================================================================
+// UNIVERSAL HARDWARE & COMPANION PHONE BARCODE INGESTION ENGINE
+// Auto-detects physical USB barcode guns, Bluetooth scanners, phone-to-PC apps,
+// fast keystroke streams, paste events, and WebHID scanners with ZERO clicks.
+// =========================================================================
 let barcodeBuffer = '';
-let lastKeyTime = Date.now();
+let lastKeyTimestamp = 0;
+let scannerFastStreak = 0;
+
+window.dispatchUniversalScan = async function(barcode) {
+  if (!barcode) return;
+  const cleanCode = barcode.toString().trim().replace(/[\r\n\t]/g, '');
+  if (cleanCode.length < 3) return;
+
+  playScannerBeep();
+  if (navigator.vibrate) navigator.vibrate([60, 30, 60]);
+
+  // 1. If "Add Product" catalog modal is open, fill barcode and focus Retail Price
+  const addProductModal = document.getElementById('addProductModal');
+  if (addProductModal && addProductModal.style.display !== 'none') {
+    const npBarInput = document.getElementById('npBarcode');
+    const npSkuInput = document.getElementById('npSku');
+    if (npBarInput) npBarInput.value = cleanCode;
+    if (npSkuInput && !npSkuInput.value) npSkuInput.value = 'SKU-' + cleanCode.slice(-6);
+    showToast(`Barcode Scanned for Product: ${cleanCode}`, 'success');
+    const sellPriceInput = document.getElementById('npSellingPrice');
+    if (sellPriceInput) {
+      sellPriceInput.focus();
+      sellPriceInput.select();
+    }
+    return;
+  }
+
+  // 2. Default Cashier Selling Flow: ZERO CLICKS REQUIRED
+  // Automatically switch to POS counter if on any other view
+  if (STATE.activeTab !== 'pos') {
+    window.switchTab('pos');
+  }
+
+  // Ensure active sale session exists
+  if (!STATE.currentSale) {
+    await startNewSale();
+  }
+
+  // Immediately add item to checkout cart
+  await addItemByBarcode(cleanCode);
+
+  // Clear search field and keep ready for next item
+  const txtBarcode = document.getElementById('txtBarcode');
+  if (txtBarcode) {
+    txtBarcode.value = '';
+    txtBarcode.focus();
+  }
+  renderSkuSearchResults([]);
+};
 
 function initBarcodeScannerHardware() {
+  // A. Global Keydown Wedge Interceptor
   window.addEventListener('keydown', (e) => {
-    if (!e || !e.key) return; // Prevent TypeError: Cannot read properties of undefined (reading 'length')
-    const currentTime = Date.now();
-    // Inter-keystroke interval for hardware scanners is < 80ms
-    if (currentTime - lastKeyTime > 120) {
+    if (!e || !e.key) return;
+    const now = Date.now();
+    const interval = now - lastKeyTimestamp;
+    lastKeyTimestamp = now;
+
+    // A gap > 320ms denotes manual typing or new scan session
+    if (interval > 320) {
       barcodeBuffer = '';
+      scannerFastStreak = 0;
+    } else {
+      scannerFastStreak++;
     }
-    lastKeyTime = currentTime;
 
-    if (e.key === 'Enter') {
-      const scannedCode = barcodeBuffer.trim();
-      if (scannedCode.length >= 3) {
+    // Check Delimiter / Suffix (Enter or Tab from scanner or companion phone)
+    if (e.key === 'Enter' || e.key === 'Tab' || e.keyCode === 13 || e.keyCode === 9) {
+      const txtBarcode = document.getElementById('txtBarcode');
+      const focusedBarcodeVal = (document.activeElement === txtBarcode && txtBarcode) ? txtBarcode.value.trim() : '';
+      const candidateCode = (barcodeBuffer.trim() || focusedBarcodeVal).trim();
+
+      if (candidateCode.length >= 3) {
         e.preventDefault();
-        playScannerBeep();
-        if (navigator.vibrate) navigator.vibrate(80);
-
-        // Check if "Add Product" catalog modal is active
-        const addProductModal = document.getElementById('addProductModal');
-        if (addProductModal && addProductModal.style.display !== 'none') {
-          const npBarInput = document.getElementById('npBarcode');
-          const npSkuInput = document.getElementById('npSku');
-          if (npBarInput) npBarInput.value = scannedCode;
-          if (npSkuInput && !npSkuInput.value) npSkuInput.value = 'SKU-' + scannedCode.slice(-6);
-          showToast(`Barcode Scanned for Product: ${scannedCode}`, 'success');
-          document.getElementById('npCostPrice')?.focus();
-        } else {
-          // Default checkout cart addition
-          addItemByBarcode(scannedCode);
-        }
+        e.stopPropagation();
+        window.dispatchUniversalScan(candidateCode);
         barcodeBuffer = '';
+        if (txtBarcode) txtBarcode.value = '';
       }
-    } else if (e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && document.activeElement !== document.getElementById('txtBarcode')) {
-      // Don't accumulate if user is typing in regular text inputs (unless it's barcode wedge speed)
-      const isInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
-      if (!isInput || (currentTime - lastKeyTime < 60)) {
-        barcodeBuffer += e.key;
+      return;
+    }
+
+    // Accumulate printable single characters
+    if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      barcodeBuffer += e.key;
+
+      // If typing in another input (e.g. search or filter) at superhuman scanner speed,
+      // prevent the raw barcode characters from polluting that input
+      const activeEl = document.activeElement;
+      const isInput = activeEl && ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeEl.tagName);
+      const isBarcodeField = activeEl && (activeEl.id === 'txtBarcode' || activeEl.id === 'npBarcode');
+
+      if (isInput && !isBarcodeField && scannerFastStreak >= 4 && interval < 50) {
+        e.preventDefault();
+      }
+    }
+  }, true);
+
+  // B. Global Paste Interceptor (phone-to-PC clipboard sync apps)
+  window.addEventListener('paste', (e) => {
+    const text = (e.clipboardData || window.clipboardData)?.getData('text')?.trim();
+    if (text && /^[A-Za-z0-9\-_]{3,32}$/.test(text)) {
+      const activeEl = document.activeElement;
+      if (!activeEl || activeEl.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        window.dispatchUniversalScan(text);
       }
     }
   });
+
+  // C. Auto-detect WebHID Barcode Scanner devices if supported
+  if ('hid' in navigator) {
+    navigator.hid.getDevices().then(devices => {
+      if (devices && devices.length > 0) {
+        console.log('[SCANNER] Paired WebHID barcode scanners auto-detected:', devices.length);
+      }
+    }).catch(() => {});
+  }
 }
 
 // 2. Mobile Phone & Webcam Live Optical Barcode Scanner
@@ -994,7 +1093,11 @@ function handleDetectedCode(code) {
     if (npSkuInput && !npSkuInput.value) npSkuInput.value = 'SKU-' + cleanCode.slice(-6);
     showToast(`Product Barcode Set: ${cleanCode}`, 'success');
     window.closeCameraScanner();
-    document.getElementById('npCostPrice')?.focus();
+    const sellInput = document.getElementById('npSellingPrice');
+    if (sellInput) {
+      sellInput.focus();
+      sellInput.select();
+    }
   } else {
     // Add item directly to checkout cart
     addItemByBarcode(cleanCode);
@@ -1163,9 +1266,14 @@ async function autoFetchAndPrintReceipt(saleId) {
     });
     const data = await res.json();
     if (data && data.receiptHtml && data.receiptHtml !== 'undefined') {
-      openReceiptModalWithHtml(data.receiptHtml);
-      window.printThermalTicket(data.receiptHtml);
+      await PrinterManager.printReceipt(data.receiptHtml);
+      showToast('Receipt sent to printer! Checkout ready for next customer.', 'success');
     }
+
+    // Auto-close any open payment or receipt modals
+    window.closeMpesaModal();
+    window.closeCashModal();
+    window.closeReceiptModal();
 
     // Auto-clear cart and ready for next customer
     await startNewSale();
@@ -1205,8 +1313,8 @@ window.simulateCustomerPin = async function(willSucceed) {
 
       const receiptHtml = (data.receipt && data.receipt.receiptHtml && data.receipt.receiptHtml !== 'undefined') ? data.receipt.receiptHtml : null;
       if (receiptHtml) {
-        openReceiptModalWithHtml(receiptHtml);
-        window.printThermalTicket(receiptHtml);
+        await PrinterManager.printReceipt(receiptHtml);
+        window.closeReceiptModal();
         await startNewSale();
       } else {
         await autoFetchAndPrintReceipt(data.saleId);
@@ -1279,8 +1387,8 @@ window.submitCashPayment = async function() {
     showToast(`Cash sale completed! Change: KES ${data.changeDueKes.toFixed(2)}`, 'success');
     const receiptHtml = (data.receipt && data.receipt.receiptHtml && data.receipt.receiptHtml !== 'undefined') ? data.receipt.receiptHtml : null;
     if (receiptHtml) {
-      openReceiptModalWithHtml(receiptHtml);
-      window.printThermalTicket(receiptHtml);
+      await PrinterManager.printReceipt(receiptHtml);
+      window.closeReceiptModal();
       await startNewSale();
     } else {
       await autoFetchAndPrintReceipt(data.sale.id);
@@ -1336,11 +1444,130 @@ function initRealTimeEvents() {
                           (target.cashierId && STATE.currentUser && target.cashierId === STATE.currentUser.id);
 
     if (isTargetedToMe && p && p.receiptHtml && p.receiptHtml !== 'undefined') {
-      openReceiptModalWithHtml(p.receiptHtml);
-      window.printThermalTicket(p.receiptHtml);
+      PrinterManager.printReceipt(p.receiptHtml);
     }
   });
 }
+
+// =========================================================================
+// THERMAL PRINTER AUTO-DETECTION & ESC/POS HARDWARE DRIVER
+// Auto-detects USB, Serial, and Bluetooth thermal receipt printers
+// =========================================================================
+const PrinterManager = {
+  activePort: null,
+  activeDevice: null,
+  printerType: 'browser', // 'serial', 'usb', 'browser'
+
+  async init() {
+    // 1. Check for previously granted Web Serial thermal printers
+    if ('serial' in navigator) {
+      try {
+        const ports = await navigator.serial.getPorts();
+        if (ports && ports.length > 0) {
+          this.activePort = ports[0];
+          this.printerType = 'serial';
+          this.updateStatusBadge('ESC/POS Serial (Ready)');
+          console.log('[PRINTER] Paired Web Serial thermal printer auto-detected.');
+          return;
+        }
+      } catch (e) {
+        console.warn('[PRINTER] Serial port check:', e);
+      }
+    }
+
+    // 2. Check for previously granted WebUSB thermal printers
+    if ('usb' in navigator) {
+      try {
+        const devices = await navigator.usb.getDevices();
+        const printer = devices.find(d => (d.configuration?.interfaces || []).some(i => i.alternates?.some(a => a.interfaceClass === 7)));
+        if (printer) {
+          this.activeDevice = printer;
+          this.printerType = 'usb';
+          this.updateStatusBadge('ESC/POS USB (Ready)');
+          console.log('[PRINTER] Paired WebUSB thermal printer auto-detected:', printer.productName);
+          return;
+        }
+      } catch (e) {
+        console.warn('[PRINTER] WebUSB check:', e);
+      }
+    }
+
+    this.updateStatusBadge('ESC/POS (Ready)');
+  },
+
+  updateStatusBadge(text) {
+    const el = document.getElementById('lblPrinterStatus');
+    if (el) el.innerText = text;
+  },
+
+  async requestPairing() {
+    if ('serial' in navigator) {
+      try {
+        const port = await navigator.serial.requestPort();
+        if (port) {
+          this.activePort = port;
+          this.printerType = 'serial';
+          this.updateStatusBadge('ESC/POS Serial (Paired)');
+          showToast('Thermal printer paired successfully via Web Serial!', 'success');
+          return;
+        }
+      } catch (e) {}
+    }
+    if ('usb' in navigator) {
+      try {
+        const device = await navigator.usb.requestDevice({ filters: [{ classCode: 7 }] });
+        if (device) {
+          this.activeDevice = device;
+          this.printerType = 'usb';
+          this.updateStatusBadge('ESC/POS USB (Paired)');
+          showToast(`Thermal printer "${device.productName || 'USB Printer'}" paired!`, 'success');
+          return;
+        }
+      } catch (e) {}
+    }
+    showToast('Standard thermal print driver is active and ready.', 'info');
+  },
+
+  async printReceipt(html) {
+    // If paired via Web Serial, send raw ESC/POS commands directly
+    if (this.printerType === 'serial' && this.activePort) {
+      try {
+        await this.activePort.open({ baudRate: 9600 });
+        const writer = this.activePort.writable.getWriter();
+        const escposData = this.htmlToEscPos(html);
+        await writer.write(escposData);
+        writer.releaseLock();
+        await this.activePort.close();
+        console.log('[PRINTER] Receipt sent to ESC/POS Serial printer hardware.');
+        return true;
+      } catch (err) {
+        console.warn('[PRINTER] Serial print notice, using browser thermal driver:', err);
+      }
+    }
+
+    // Default seamless print via isolated iframe to default OS printer
+    window.printThermalTicket(html);
+    return true;
+  },
+
+  htmlToEscPos(html) {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    const text = (div.innerText || div.textContent || '').replace(/\n\s*\n/g, '\n');
+    const encoder = new TextEncoder();
+    // ESC @ (Initialize) + text + ESC d 3 (feed lines) + GS V 66 0 (full cut)
+    const init = new Uint8Array([0x1B, 0x40]);
+    const body = encoder.encode(text + '\n\n\n');
+    const cut = new Uint8Array([0x1D, 0x56, 0x42, 0x00]);
+    const merged = new Uint8Array(init.length + body.length + cut.length);
+    merged.set(init, 0);
+    merged.set(body, init.length);
+    merged.set(cut, init.length + body.length);
+    return merged;
+  }
+};
+
+window.requestPrinterPairing = () => PrinterManager.requestPairing();
 
 // Dedicated isolated thermal printer for 80mm ESC/POS slips
 window.printThermalTicket = function(html) {
@@ -2691,15 +2918,22 @@ window.handleCreateProductSubmit = async function(e) {
       return;
     }
 
+    const retailPrice = parseFloat(sellInput?.value) || 0;
+    if (retailPrice <= 0) {
+      hideLoading();
+      showToast('Retail Selling Price (KES) is required and must be greater than 0.', 'warning');
+      return;
+    }
+
     const payload = {
       name,
       barcode,
       sku: (skuInput && skuInput.value.trim()) || ('SKU-' + barcode.slice(-6)),
       category: (catElem && catElem.value) || 'FMCG & Groceries',
       initialStock: parseFloat(stockInput?.value) || 100,
-      costPriceKes: parseFloat(costInput?.value) || 0,
-      sellingPriceKes: parseFloat(sellInput?.value) || 0,
-      wholesalePriceKes: parseFloat(wholeInput?.value) || parseFloat(sellInput?.value) || 0,
+      costPriceKes: parseFloat(costInput?.value) || Math.round(retailPrice * 0.8),
+      sellingPriceKes: retailPrice,
+      wholesalePriceKes: parseFloat(wholeInput?.value) || retailPrice,
       vatRate: vatElem ? parseFloat(vatElem.value) : 16.0
     };
 

@@ -2169,3 +2169,252 @@ body {
     height: 85px !important;
   }
 }
+
+/* ==========================================================================
+   MOBILE RESPONSIVENESS & TOUCH OPTIMIZATION (PHONES & TABLETS)
+   ========================================================================== */
+
+/* Printer Status Pill */
+.pill-printer {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #166534;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.pill-printer:hover {
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+/* Mobile Sidebar Backdrop */
+.sidebar-mobile-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  z-index: 998;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.sidebar-mobile-backdrop.active {
+  display: block;
+  opacity: 1;
+}
+
+/* Table Responsive Mobile Wrapper */
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 992px) {
+  .pos-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow-y: visible;
+  }
+  .pos-catalog-card {
+    height: auto;
+    overflow: visible;
+  }
+  .pos-cart-card {
+    height: auto;
+    min-height: 480px;
+  }
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  body {
+    overflow-y: auto;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .app-layout {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+  }
+
+  .app-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: -290px;
+    width: 280px;
+    z-index: 999;
+    transition: left 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 10px 0 25px rgba(0, 0, 0, 0.5);
+  }
+
+  .app-sidebar.mobile-open {
+    left: 0;
+  }
+
+  .app-sidebar.collapsed {
+    width: 280px;
+  }
+
+  .app-sidebar.collapsed .brand-details,
+  .app-sidebar.collapsed .user-meta-info,
+  .app-sidebar.collapsed .nav-text,
+  .app-sidebar.collapsed .sidebar-footer {
+    display: flex !important;
+  }
+
+  .app-main-stage {
+    width: 100%;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .stage-topbar {
+    padding: 10px 14px;
+    height: auto;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .topbar-left {
+    gap: 8px;
+  }
+
+  .topbar-breadcrumbs {
+    display: none;
+  }
+
+  .topbar-title {
+    font-size: 1.1rem;
+  }
+
+  .topbar-center {
+    width: 100%;
+    order: 3;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    justify-content: flex-start;
+    gap: 6px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .status-pill {
+    white-space: nowrap;
+    padding: 3px 8px;
+    font-size: 0.7rem;
+    flex-shrink: 0;
+  }
+
+  .topbar-right {
+    margin-left: auto;
+    gap: 6px;
+  }
+
+  .topbar-right .btn-sm {
+    padding: 5px 8px;
+    font-size: 0.75rem;
+  }
+
+  .stage-content {
+    padding: 12px 10px;
+    height: auto;
+    overflow: visible;
+  }
+
+  .kpi-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .scan-station-hero {
+    padding: 12px;
+  }
+
+  .scan-station-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .scan-bar-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .input-with-icon-lg {
+    width: 100%;
+    min-width: 100%;
+  }
+
+  .scan-bar-row .btn {
+    width: 100%;
+    justify-content: center;
+    padding: 12px;
+    font-size: 0.95rem;
+  }
+
+  .cart-table th, .cart-table td {
+    padding: 6px 4px;
+    font-size: 0.78rem;
+  }
+
+  .modal-dialog {
+    width: 96vw;
+    max-width: 96vw;
+    margin: 8px auto;
+    padding: 16px;
+    max-height: 94vh;
+    border-radius: var(--radius);
+  }
+
+  .modal-header h3 {
+    font-size: 1.1rem;
+  }
+
+  .form-row {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .login-card-container {
+    width: 100%;
+    max-width: 100%;
+    padding: 22px 14px;
+    margin: 8px auto;
+  }
+
+  .login-form {
+    padding: 16px;
+  }
+
+  .content-header-bar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .action-btn-group {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .action-btn-group .btn {
+    flex: 1;
+    min-width: 140px;
+    justify-content: center;
+  }
+
+  .saas-table th, .saas-table td {
+    padding: 8px 6px;
+    font-size: 0.78rem;
+  }
+}

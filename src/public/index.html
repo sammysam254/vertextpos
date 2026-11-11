@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Vertext POS — SaaS Retail Enterprise Platform (KES)</title>
-  <link rel="stylesheet" href="styles.css?v=2.9">
+  <link rel="stylesheet" href="styles.css?v=3.0">
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -189,6 +189,9 @@
       </div>
     </aside>
 
+    <!-- Mobile Sidebar Backdrop Overlay -->
+    <div id="sidebarMobileBackdrop" class="sidebar-mobile-backdrop" onclick="window.toggleSidebar(false)"></div>
+
     <!-- MAIN STAGE (TOP BAR + CONTENT VIEWS) -->
     <div class="app-main-stage">
       
@@ -220,6 +223,10 @@
           <div class="status-pill pill-shift" id="topbarShiftPill" onclick="window.openShiftModal()">
             <span class="pulse-dot green"></span>
             <span id="lblShiftStatusText">SHIFT OPEN (Float KES 2,500)</span>
+          </div>
+          <div class="status-pill pill-printer" id="topbarPrinterPill" onclick="window.requestPrinterPairing()" title="Click to Auto-Detect or Pair ESC/POS Thermal Printer">
+            <span class="pulse-dot green"></span>
+            <span>PRINTER: <strong id="lblPrinterStatus">ESC/POS (AUTO)</strong></span>
           </div>
         </div>
 
@@ -1851,20 +1858,30 @@
               <input type="number" id="npInitialStock" class="form-control" value="100" min="1" step="1">
             </div>
           </div>
-          <div class="form-row">
-            <div class="form-group flex-1">
-              <label>Cost Price (KES):</label>
-              <input type="number" id="npCostPrice" class="form-control" step="0.5" placeholder="50.00" required>
+          <div class="form-group">
+            <label style="font-weight:700; color:var(--primary); font-size:0.95rem;">Retail Selling Price (KES) &bull; Required:</label>
+            <div class="input-with-icon-lg" style="border:2px solid var(--primary); background:#eff6ff;">
+              <span style="font-weight:800; color:var(--primary); font-size:1.05rem; padding-left:4px;">KES</span>
+              <input type="number" id="npSellingPrice" class="form-control" step="0.5" placeholder="e.g. 65.00" required style="font-size:1.15rem; font-weight:800; background:transparent;">
             </div>
-            <div class="form-group flex-1">
-              <label>Retail Selling Price (KES):</label>
-              <input type="number" id="npSellingPrice" class="form-control" step="0.5" placeholder="65.00" required>
-            </div>
-            <div class="form-group flex-1">
-              <label>Wholesale Bulk Price (KES):</label>
-              <input type="number" id="npWholesalePrice" class="form-control" step="0.5" placeholder="60.00">
-            </div>
+            <small class="helper-text" style="color:#64748b; font-size:0.75rem;">
+              Single price entry: Simply enter your shelf retail price.
+            </small>
           </div>
+
+          <details class="credentials-hint-drawer" style="margin-top:6px; margin-bottom:12px;">
+            <summary style="font-size:0.78rem; color:#64748b; cursor:pointer;">⚙️ Optional: Wholesale &amp; Cost Breakdown (Auto-defaulted if blank)</summary>
+            <div class="form-row mt-2">
+              <div class="form-group flex-1">
+                <label>Cost Price (KES) &bull; Optional:</label>
+                <input type="number" id="npCostPrice" class="form-control" step="0.5" placeholder="Auto (80% of retail)">
+              </div>
+              <div class="form-group flex-1">
+                <label>Wholesale Price (KES) &bull; Optional:</label>
+                <input type="number" id="npWholesalePrice" class="form-control" step="0.5" placeholder="Auto (Same as retail)">
+              </div>
+            </div>
+          </details>
           <div class="form-group">
             <label>KRA VAT Classification:</label>
             <select id="npVatRate" class="form-control">
